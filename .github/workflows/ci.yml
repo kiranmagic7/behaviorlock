@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-vet:
+    name: Format, vet, and shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.23.x
+          cache: false
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal schemas)"
+      - name: Vet Go code
+        run: go vet ./...
+      - name: Check shell syntax and style
+        run: |
+          sh -n runner/*.sh scripts/*.sh
+          shellcheck runner/*.sh scripts/*.sh
+      - name: Validate workflows and JSON contracts
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          jq empty schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.23.x
+          cache: false
+      - name: Run race enabled tests
+        run: go test -race ./...
+      - name: Build CLI
+        run: go build -trimpath ./cmd/behaviorlock
+
+  vulnerability-scan:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.23.x
+          cache: false
+      - name: Scan reachable Go code
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  dco:
+    name: DCO signoff
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify commit signoffs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: ./scripts/check-dco.sh "$BASE_SHA" "$HEAD_SHA"
+
+  runner-integration:
+    name: Hardened runner integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.23.x
+          cache: false
+      - name: Build pinned runner
+        run: docker build --pull=false --tag behaviorlock-runner:dev runner
+      - name: Exercise trusted adversarial fixture
+        run: ./scripts/integration-runner.sh
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - format-vet
+      - test
+      - vulnerability-scan
+      - dco
+      - runner-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce required results
+        run: |
+          test "${{ needs.format-vet.result }}" = "success"
+          test "${{ needs.test.result }}" = "success"
+          test "${{ needs.vulnerability-scan.result }}" = "success"
+          test "${{ needs.dco.result }}" = "success"
+          test "${{ needs.runner-integration.result }}" = "success"

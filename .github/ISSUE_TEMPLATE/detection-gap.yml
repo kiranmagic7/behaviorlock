@@ -1,0 +1,34 @@
+name: Observation gap
+description: Report behavior that the current trace or normalization pipeline missed.
+title: "gap: "
+labels:
+  - observation-gap
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected observation
+      description: What file, process, or network behavior should have appeared?
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal inert fixture
+      description: Describe or link a deterministic, non-malicious reproducer with no private data.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Include the relevant normalized trace lines and tool versions, without secret values.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: The reproduction is authorized and contains no live malware, credentials, or personal data.
+          required: true

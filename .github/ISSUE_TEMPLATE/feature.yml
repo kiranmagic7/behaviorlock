@@ -1,0 +1,39 @@
+name: Feature proposal
+description: Propose a focused improvement with a testable outcome.
+title: "proposal: "
+labels:
+  - proposal
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or security problem exists today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Testable outcome
+      description: What observable result would prove the proposal works?
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Trust boundary impact
+      description: How could this change increase or reduce risk from untrusted package code?
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - npm Linux MVP
+        - trace parser or schema
+        - sandbox hardening
+        - CI and contributor experience
+        - future ecosystem
+    validations:
+      required: true

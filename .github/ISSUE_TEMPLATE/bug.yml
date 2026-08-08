@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible defect that is not a security vulnerability.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach private traces, credentials, or unpublished packages.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened? Include redacted output and exit codes.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest public package example and exact commands.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BehaviorLock version or commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Linux, Docker, Node, and npm versions
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Disclosure check
+      options:
+        - label: This report contains no credentials, private traces, or unpublished package contents.
+          required: true
+        - label: This is not a security vulnerability requiring private disclosure.
+          required: true

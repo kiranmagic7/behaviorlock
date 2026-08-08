@@ -1,0 +1,11 @@
+/bin/
+/behaviorlock
+/dist/
+/artifacts/
+/coverage.out
+*.profile.json
+*.report.json
+*.report.md
+*.report.txt
+*.raw.strace
+.DS_Store

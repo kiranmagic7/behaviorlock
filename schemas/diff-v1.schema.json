@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:behaviorlock:schema:diff:1.0.0",
+  "title": "BehaviorLock npm install behavior diff",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "tool", "baseline", "candidate", "baselineDigest", "candidateDigest", "added", "removed", "summary", "limitations"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "kind": { "const": "npm.install.diff" },
+    "tool": { "$ref": "#/$defs/tool" },
+    "baseline": { "$ref": "#/$defs/subject" },
+    "candidate": { "$ref": "#/$defs/subject" },
+    "baselineDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "candidateDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "added": {
+      "type": "array",
+      "maxItems": 250000,
+      "items": { "$ref": "#/$defs/change" }
+    },
+    "removed": {
+      "type": "array",
+      "maxItems": 250000,
+      "items": { "$ref": "#/$defs/behavior" }
+    },
+    "summary": { "$ref": "#/$defs/summary" },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "behaviorlock" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "subject": {
+      "type": "object",
+      "required": ["ecosystem", "name", "version", "purl"],
+      "properties": {
+        "ecosystem": { "const": "npm" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 214 },
+        "version": { "type": "string", "minLength": 5, "maxLength": 128 },
+        "purl": { "type": "string", "pattern": "^pkg:npm/", "maxLength": 512 },
+        "registryIntegrity": { "type": "string", "pattern": "^sha512-", "maxLength": 256 },
+        "tarballSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "dependencyLockSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "behavior": {
+      "type": "object",
+      "required": ["type", "operation", "target", "outcome", "count", "evidence", "sourceSyscall"],
+      "properties": {
+        "type": {
+          "enum": [
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.create",
+            "filesystem.delete",
+            "filesystem.rename",
+            "filesystem.permission",
+            "process.exec",
+            "network.connect"
+          ]
+        },
+        "operation": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "target": { "type": "string", "maxLength": 4099 },
+        "arguments": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "maxLength": 4099 }
+        },
+        "outcome": { "enum": ["success", "blocked", "failed", "unknown"] },
+        "errno": { "type": "string", "maxLength": 128 },
+        "sensitive": { "type": "boolean" },
+        "count": { "type": "integer", "minimum": 1 },
+        "evidence": { "type": "string", "pattern": "^event:sha256:[0-9a-f]{64}$" },
+        "sourceSyscall": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "change": {
+      "type": "object",
+      "required": ["risk", "ruleId", "reason", "behavior"],
+      "properties": {
+        "risk": { "enum": ["low", "medium", "high", "critical"] },
+        "ruleId": { "type": "string", "pattern": "^BL[0-9]{3}$" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "behavior": { "$ref": "#/$defs/behavior" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["highestRisk", "verdict"],
+      "properties": {
+        "highestRisk": { "enum": ["none", "low", "medium", "high", "critical"] },
+        "verdict": { "enum": ["pass", "review", "fail"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

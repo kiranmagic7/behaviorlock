@@ -1,0 +1,25 @@
+name: Review level or normalization problem
+description: Report a noisy rule, unstable target, or missing review signal.
+title: "signal: "
+labels:
+  - signal-quality
+body:
+  - type: input
+    id: rule
+    attributes:
+      label: Rule ID or behavior type
+    validations:
+      required: true
+  - type: textarea
+    id: redacted
+    attributes:
+      label: Minimal redacted evidence
+      description: Include normalized behavior only. Never include secret contents.
+    validations:
+      required: true
+  - type: textarea
+    id: reasoning
+    attributes:
+      label: Why the current result is misleading
+    validations:
+      required: true

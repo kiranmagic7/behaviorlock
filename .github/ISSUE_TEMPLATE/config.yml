@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/kiranmagic7/behaviorlock/security/advisories/new
+    about: Do not disclose exploitable vulnerabilities in a public issue.
+  - name: Ask a support or design question
+    url: https://github.com/kiranmagic7/behaviorlock/discussions
+    about: Use Discussions for questions that are not bugs or vulnerabilities.

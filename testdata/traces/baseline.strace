@@ -1,0 +1,4 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
+openat(AT_FDCWD, "/work/package.json", O_RDONLY|O_CLOEXEC) = 3
+openat(AT_FDCWD, "/work/cache.json", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 4
++++ exited with 0 +++
