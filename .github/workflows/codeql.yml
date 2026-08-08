@@ -29,4 +29,4 @@ jobs:
       - name: Build
         run: go build ./cmd/behaviorlock
       - name: Analyze
-        uses: github/codeql-action/analyze@404bd795832c959ffb8efae2b1b4cc1aafc82058 # v3.37.6
+        uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
