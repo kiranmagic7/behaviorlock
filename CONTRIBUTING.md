@@ -64,6 +64,8 @@ The signoff certifies that you have the right to submit the work under Apache Li
 
 Human commits require signoff. GitHub authenticated Dependabot pull requests are the only automated exception; author names or email addresses alone never qualify for an exemption.
 
+Pull request commits use strict matching between the commit author and the `Signed-off-by` trailer. On protected `main`, GitHub may create a squash commit under the authenticated account login while preserving a GitHub noreply signoff from the reviewed commit. The push checker accepts that case only when GitHub is the recorded committer and the signoff email belongs to the same GitHub login. This limited path is unavailable to pull request commits.
+
 ## Review
 
 All changes enter through a pull request. `main` requires the aggregate CI check, resolved conversations, and maintainer approval. Changes to the runner, GitHub workflows, security policy, governance, schemas, or release process require code owner review.
