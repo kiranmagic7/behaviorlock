@@ -33,13 +33,28 @@ case "$mode" in
       chmod 0400 "$HOME/.ssh/id_rsa" "$HOME/.aws/credentials" "$HOME/.docker/config.json" "$HOME/.npmrc"
     '
     set +e
+    # The traced child shell expands its positional argument.
+    # shellcheck disable=SC2016
     strace --kill-on-exit -u scanner -ff -qq -s 4096 -yy \
       -e trace=%file,%process,%network \
       -o /trace/raw \
-      /opt/behaviorlock/lifecycle.sh "$package_spec" \
-      > /tmp/package-output.log 2>&1
+      -- /bin/sh -c 'exec /opt/behaviorlock/lifecycle.sh "$1" > /tmp/package-output.log 2>&1' \
+      behaviorlock-lifecycle "$package_spec" \
+      2> /tmp/strace-error.log
     command_exit=$?
     set -e
+    trace_found=false
+    for trace_file in /trace/raw*; do
+      if [ -f "$trace_file" ]; then
+        trace_found=true
+        break
+      fi
+    done
+    if [ "$trace_found" != true ]; then
+      echo "strace did not produce a trace; capture is incomplete" >&2
+      sed -n '1,20p' /tmp/strace-error.log >&2
+      exit 72
+    fi
     printf 'BEHAVIORLOCK_TRACE_V1\n'
     for trace_file in /trace/raw*; do
       [ -f "$trace_file" ] || continue
