@@ -35,7 +35,7 @@ case "$mode" in
     set +e
     # The traced child shell expands its positional argument.
     # shellcheck disable=SC2016
-    strace --kill-on-exit -u scanner -ff -qq -s 4096 -yy \
+    strace -u scanner -ff -qq -s 4096 -yy \
       -e trace=%file,%process,%network \
       -o /trace/raw \
       -- /bin/sh -c 'exec /opt/behaviorlock/lifecycle.sh "$1" > /tmp/package-output.log 2>&1' \

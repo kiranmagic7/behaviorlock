@@ -94,11 +94,25 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify commit signoffs
+      - name: Verify human commit signoffs with the trusted base checker
+        if: github.actor != 'dependabot[bot]'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: ./scripts/check-dco.sh "$BASE_SHA" "$HEAD_SHA"
+        run: |
+          checker="$RUNNER_TEMP/check-dco.sh"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git show "${BASE_SHA}:scripts/check-dco.sh" > "$checker"
+          else
+            cp scripts/check-dco.sh "$checker"
+          fi
+          chmod 0700 "$checker"
+          "$checker" "$BASE_SHA" "$HEAD_SHA"
+      - name: Accept GitHub authenticated Dependabot update
+        if: github.actor == 'dependabot[bot]'
+        run: |
+          test "${{ github.event_name }}" = "pull_request"
+          test "${{ github.event.pull_request.user.login }}" = "dependabot[bot]"
 
   runner-integration:
     name: Hardened runner integration
