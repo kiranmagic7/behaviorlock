@@ -2,9 +2,13 @@
 set -u
 
 package_spec="${1:-}"
+package_name="${package_spec%@*}"
+if [ -z "$package_name" ] || [ "$package_name" = "$package_spec" ]; then
+  exit 64
+fi
 cat /opt/behaviorlock/sentinel-start >/dev/null || exit 70
 set +e
-npm rebuild --offline --foreground-scripts --no-audit --no-fund -- "$package_spec"
+npm rebuild --offline --foreground-scripts --no-audit --no-fund -- "$package_name"
 command_exit=$?
 set -e
 cat /opt/behaviorlock/sentinel-end >/dev/null || exit 71
