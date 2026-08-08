@@ -47,7 +47,7 @@ Docker bounds memory, process count, CPU, file descriptors, shared memory, and r
 
 ### Trace tampering
 
-The trace supervisor and `strace` run separately from the package uid. Root owned mode `0700` trace storage prevents the package from erasing or replacing raw trace files. Start and end sentinel reads, a nonempty recognized event set, a footer, and tracer exit status must all be present. A missing sentinel, tracer failure, timeout, parser error, or output limit yields an incomplete result.
+The trace supervisor and `strace` run separately from the package uid. The supervisor retains `SYS_PTRACE` only inside the container PID namespace; the package runs as uid `65532` with zero effective capabilities. Root owned mode `0700` trace storage prevents the package from erasing or replacing raw trace files. Start and end sentinel reads, a nonempty recognized event set, a footer, and tracer exit status must all be present. A missing sentinel, tracer failure, timeout, parser error, or output limit yields an incomplete result.
 
 Package code can still detect tracing, alter its own behavior, attack the shared kernel, or exploit a tracer or runtime vulnerability. A tagged executable release remains blocked until broader adversarial tests show that package output cannot enter the trace channel and tracees terminate when the tracer dies.
 

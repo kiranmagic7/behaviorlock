@@ -210,6 +210,7 @@ func buildTraceArgs(containerName, image, packageSpec string) []string {
 		"--cap-drop", "ALL",
 		"--cap-add", "SETUID",
 		"--cap-add", "SETGID",
+		"--cap-add", "SYS_PTRACE",
 		"--security-opt", "no-new-privileges:true",
 		"--pids-limit", "128",
 		"--memory", "512m",

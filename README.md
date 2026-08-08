@@ -77,7 +77,7 @@ bin/behaviorlock capture \
 
 The explicit `--experimental` flag is intentional. Acquisition runs as a nonroot user in a disposable container with lifecycle scripts disabled. The resolved lockfile digest is recorded, then the filesystem is committed to a temporary image. Lifecycle execution runs offline with a read only root filesystem, no host mounts, no inherited credentials, and bounded runtime resources.
 
-The trace supervisor and `strace` run under a different identity from package scripts. Trace files live in a root owned temporary filesystem that the package UID cannot read or modify. The container begins with only `SETUID` and `SETGID` capabilities so the supervisor can drop the traced command to uid `65532`; the package does not retain those capabilities.
+The trace supervisor and `strace` run under a different identity from package scripts. Trace files live in a root owned temporary filesystem that the package UID cannot read or modify. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` for the supervisor to change identity and trace inside the container PID namespace. The package runs as uid `65532` with zero effective capabilities.
 
 The implementation rejects an empty trace, missing start or end sentinel, timeout, truncated stream, malformed completion marker, parser error, or tracer process failure. Those conditions return an incomplete result and exit code `2`. This removes known false pass paths, but it is not a complete hostile code guarantee.
 

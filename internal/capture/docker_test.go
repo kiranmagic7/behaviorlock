@@ -23,7 +23,7 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 		}
 	}
 	joined := strings.Join(arguments, " ")
-	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "no-new-privileges:true", "--pids-limit 128", "/trace:rw,nosuid,nodev,noexec"} {
+	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "--cap-add SYS_PTRACE", "no-new-privileges:true", "--pids-limit 128", "/trace:rw,nosuid,nodev,noexec"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("trace arguments missing %q: %s", required, joined)
 		}

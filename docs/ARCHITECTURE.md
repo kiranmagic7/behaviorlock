@@ -14,7 +14,7 @@ Capture has two disposable container phases.
 
 The preparation phase installs an exact top level package version with lifecycle scripts disabled and records the generated dependency lock digest. It runs as uid `65532` and receives no host mounts, home directory, npm configuration, Git configuration, SSH material, cloud credentials, repository token, or Docker socket.
 
-The execution phase starts from the prepared filesystem. Networking is disabled. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. The supervisor receives only `SETUID` and `SETGID` after dropping all other capabilities, solely to perform that identity transition. Docker's default seccomp policy remains intact.
+The execution phase starts from the prepared filesystem. Networking is disabled. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` so the supervisor can perform the identity transition and trace inside the container PID namespace. The package process has zero effective capabilities. Docker's default seccomp policy remains intact.
 
 `strace` writes into a root owned mode `0700` temporary filesystem that package code cannot access. It follows a selected set of file, process, and network syscalls. Package output is separated from the trace envelope. Root owned start and end sentinel reads and a completion footer establish basic channel integrity. Missing or malformed completion evidence makes the profile incomplete.
 
