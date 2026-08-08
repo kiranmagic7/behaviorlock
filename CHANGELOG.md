@@ -31,3 +31,4 @@ All notable changes will be documented here. The project follows Keep a Changelo
 8. Path normalization applies only at genuine disposable root boundaries.
 9. Docker client proxy variables are explicitly cleared in every runner container.
 10. Protected main DCO verification recognizes GitHub created squash identities without relaxing strict pull request checks.
+11. CodeQL uses the fully pinned v4 action line before the v3 retirement deadline.
