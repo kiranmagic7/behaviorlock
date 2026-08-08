@@ -37,6 +37,7 @@ jobs:
         run: |
           sh -n runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
           shellcheck runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
+          ./scripts/test-dco.sh
       - name: Validate workflows and JSON contracts
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
@@ -103,11 +104,13 @@ jobs:
           checker="$RUNNER_TEMP/check-dco.sh"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git show "${BASE_SHA}:scripts/check-dco.sh" > "$checker"
+            mode="strict"
           else
             cp scripts/check-dco.sh "$checker"
+            mode="github-squash"
           fi
           chmod 0700 "$checker"
-          "$checker" "$BASE_SHA" "$HEAD_SHA"
+          "$checker" "$BASE_SHA" "$HEAD_SHA" "$mode"
       - name: Accept GitHub authenticated Dependabot update
         if: github.actor == 'dependabot[bot]'
         run: |
