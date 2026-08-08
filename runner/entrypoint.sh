@@ -43,6 +43,11 @@ case "$mode" in
       2> /tmp/strace-error.log
     command_exit=$?
     set -e
+    if [ -s /tmp/strace-error.log ]; then
+      echo "strace reported diagnostics; capture is incomplete" >&2
+      sed -n '1,20p' /tmp/strace-error.log >&2
+      exit 72
+    fi
     trace_found=false
     for trace_file in /trace/raw*; do
       if [ -f "$trace_file" ]; then

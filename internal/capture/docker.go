@@ -43,6 +43,11 @@ type RunnerMetadata struct {
 	Strace string `json:"strace"`
 }
 
+type imageInspect struct {
+	ID           string `json:"Id"`
+	Architecture string `json:"Architecture"`
+}
+
 type DockerRunner struct {
 	dockerPath string
 	run        func(context.Context, []string, int64, int64) (commandResult, error)
@@ -73,8 +78,7 @@ func (runner *DockerRunner) Doctor(ctx context.Context) error {
 	if result.ExitCode != 0 || strings.TrimSpace(string(result.Stdout)) == "" {
 		return fmt.Errorf("docker daemon check failed: %s", safeDiagnostic(result.Stderr))
 	}
-	result, err = runner.run(ctx, []string{"image", "inspect", RunnerImage, "--format", "{{.Id}}"}, 64<<10, 64<<10)
-	if err != nil || result.ExitCode != 0 {
+	if _, _, err := runner.imageDetails(ctx, RunnerImage); err != nil {
 		return fmt.Errorf("runner image %s is missing; run `make runner` from the repository", RunnerImage)
 	}
 	return nil
@@ -109,7 +113,7 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	if err != nil {
 		return timedOutProfile(profile, captureContext, err)
 	}
-	runnerMetadata, err := runner.runnerMetadata(captureContext)
+	runnerMetadata, err := runner.runnerMetadata(captureContext, runnerImageID)
 	if err != nil {
 		return timedOutProfile(profile, captureContext, err)
 	}
@@ -119,7 +123,7 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	profile.Capture.NPMVersion = runnerMetadata.NPM
 	profile.Capture.StraceVersion = runnerMetadata.Strace
 
-	prepareArgs := buildPrepareArgs(prepContainer, spec.String())
+	prepareArgs := buildPrepareArgs(prepContainer, runnerImageID, spec.String())
 	created, err := runner.run(captureContext, prepareArgs, 64<<10, maxPreparationLog)
 	if err != nil || created.ExitCode != 0 {
 		return timedOutProfile(profile, captureContext, fmt.Errorf("create preparation container: %s", safeDiagnostic(created.Stderr)))
@@ -138,10 +142,14 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	if err != nil || committed.ExitCode != 0 {
 		return timedOutProfile(profile, captureContext, fmt.Errorf("commit disposable preparation image: %s", safeDiagnostic(committed.Stderr)))
 	}
+	preparedImageID := strings.TrimSpace(string(committed.Stdout))
+	if !validSHA256(preparedImageID) {
+		return profile, errors.New("committed preparation image did not resolve to a content ID")
+	}
 	_, _ = runner.run(captureContext, []string{"rm", "--force", prepContainer}, 64<<10, 64<<10)
 
 	started := time.Now()
-	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, temporaryImage, spec.String()), maxTraceStream, 1<<20)
+	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String()), maxTraceStream, 1<<20)
 	duration := time.Since(started)
 	profile.Capture.DurationMillis = duration.Milliseconds()
 
@@ -174,8 +182,8 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	return profile, nil
 }
 
-func buildPrepareArgs(containerName, packageSpec string) []string {
-	return []string{
+func buildPrepareArgs(containerName, runnerImageID, packageSpec string) []string {
+	arguments := []string{
 		"create",
 		"--name", containerName,
 		"--network", "bridge",
@@ -197,12 +205,13 @@ func buildPrepareArgs(containerName, packageSpec string) []string {
 		"--env", "npm_config_audit=false",
 		"--env", "npm_config_fund=false",
 		"--env", "npm_config_update_notifier=false",
-		RunnerImage, "prepare", packageSpec,
 	}
+	arguments = appendScrubbedProxyEnvironment(arguments)
+	return append(arguments, runnerImageID, "prepare", packageSpec)
 }
 
 func buildTraceArgs(containerName, image, packageSpec string) []string {
-	return []string{
+	arguments := []string{
 		"run", "--name", containerName,
 		"--network", "none",
 		"--read-only",
@@ -231,35 +240,46 @@ func buildTraceArgs(containerName, image, packageSpec string) []string {
 		"--env", "npm_config_audit=false",
 		"--env", "npm_config_fund=false",
 		"--env", "npm_config_update_notifier=false",
-		image, "trace", packageSpec,
 	}
+	arguments = appendScrubbedProxyEnvironment(arguments)
+	return append(arguments, image, "trace", packageSpec)
+}
+
+func appendScrubbedProxyEnvironment(arguments []string) []string {
+	for _, name := range []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+		"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+	} {
+		arguments = append(arguments, "--env", name+"=")
+	}
+	return arguments
 }
 
 func (runner *DockerRunner) imageDetails(ctx context.Context, image string) (string, string, error) {
-	result, err := runner.run(ctx, []string{"image", "inspect", image, "--format", "{{.Id}}"}, 64<<10, 64<<10)
+	result, err := runner.run(ctx, []string{"image", "inspect", image, "--format", "{{json .}}"}, 64<<10, 64<<10)
 	if err != nil || result.ExitCode != 0 {
 		return "", "", fmt.Errorf("inspect runner image: %s", safeDiagnostic(result.Stderr))
 	}
-	value := strings.TrimSpace(string(result.Stdout))
-	if !strings.HasPrefix(value, "sha256:") {
+	var inspected imageInspect
+	if err := json.Unmarshal(result.Stdout, &inspected); err != nil {
+		return "", "", fmt.Errorf("decode runner image metadata: %w", err)
+	}
+	if !validSHA256(inspected.ID) {
 		return "", "", errors.New("runner image did not resolve to a content ID")
 	}
-	result, err = runner.run(ctx, []string{"image", "inspect", image, "--format", "{{.Architecture}}"}, 64<<10, 64<<10)
-	if err != nil || result.ExitCode != 0 {
-		return "", "", fmt.Errorf("inspect runner architecture: %s", safeDiagnostic(result.Stderr))
-	}
-	architecture := strings.TrimSpace(string(result.Stdout))
-	if architecture == "" {
+	if inspected.Architecture == "" || len(inspected.Architecture) > 64 {
 		return "", "", errors.New("runner image architecture is missing")
 	}
-	return value, architecture, nil
+	return inspected.ID, inspected.Architecture, nil
 }
 
-func (runner *DockerRunner) runnerMetadata(ctx context.Context) (RunnerMetadata, error) {
+func (runner *DockerRunner) runnerMetadata(ctx context.Context, runnerImageID string) (RunnerMetadata, error) {
 	arguments := []string{
 		"run", "--rm", "--network", "none", "--read-only", "--user", "65532:65532",
-		"--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", RunnerImage, "version",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
 	}
+	arguments = appendScrubbedProxyEnvironment(arguments)
+	arguments = append(arguments, runnerImageID, "version")
 	result, err := runner.run(ctx, arguments, 64<<10, 64<<10)
 	if err != nil || result.ExitCode != 0 {
 		return RunnerMetadata{}, fmt.Errorf("read runner versions: %s", safeDiagnostic(result.Stderr))
@@ -320,7 +340,7 @@ func parsePrepareMetadata(output []byte) (PrepareMetadata, error) {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &metadata); err != nil {
 			return PrepareMetadata{}, fmt.Errorf("decode preparation metadata: %w", err)
 		}
-		if !strings.HasPrefix(metadata.Integrity, "sha512-") {
+		if !model.ValidRegistryIntegrity(metadata.Integrity) {
 			return PrepareMetadata{}, errors.New("npm registry integrity metadata is missing or unsupported")
 		}
 		if !validSHA256(metadata.DependencyLockSHA256) {

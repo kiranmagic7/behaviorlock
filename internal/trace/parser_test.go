@@ -36,6 +36,26 @@ func TestParseRejectsUnfinishedTrace(t *testing.T) {
 	}
 }
 
+func TestNormalizePathReplacesOnlyRootBoundaries(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`openat(AT_FDCWD, "/work/output.txt", O_WRONLY|O_CREAT, 0600) = 3`,
+		`openat(AT_FDCWD, "/workspace/output.txt", O_WRONLY|O_CREAT, 0600) = 3`,
+		`openat(AT_FDCWD, "/home/scanner/.npmrc", O_RDONLY) = 3`,
+		`openat(AT_FDCWD, "/home/scanner-backup/.npmrc", O_RDONLY) = 3`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"$WORK/output.txt", "/workspace/output.txt", "$HOME/.npmrc", "/home/scanner-backup/.npmrc"}
+	for index, target := range want {
+		if result.Behaviors[index].Target != target {
+			t.Fatalf("target %d = %q, want %q", index, result.Behaviors[index].Target, target)
+		}
+	}
+}
+
 func TestParseEnvelopeRequiresCompletionMarker(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := ParseEnvelope([]byte("BEHAVIORLOCK_TRACE_V1\nexecve(\"/bin/true\", [\"true\"], 0x0) = 0\n"))

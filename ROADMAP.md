@@ -15,15 +15,16 @@ Every item below must pass on a GitHub hosted Linux runner:
 2. Package input cannot change the image, entrypoint, mounts, network, environment, or Docker flags.
 3. Host environment, home, npm configuration, SSH material, Git configuration, cloud credentials, and Docker socket never appear inside the container or report.
 4. Root filesystem writes fail and work directory writes succeed.
-5. TCP, UDP, DNS, private address, host gateway, and cloud metadata attempts fail.
-6. Child, grandchild, native executable, and shell activity remain observable.
-7. Tracer death terminates tracees and produces `trace_incomplete`.
-8. Fake syscall lines, terminal control characters, and GitHub workflow commands cannot enter the trace channel.
-9. Process, memory, descriptor, file, output, syscall, and timeout exhaustion stop within limits and leave no container or image.
-10. Unsupported tracing fails closed without privileged mode, disabled seccomp, host namespaces, or broad capabilities.
-11. Ten repeated trusted fixture runs produce the same normalized behavior set and stable digest.
-12. Every added report item points to retained raw trace evidence.
-13. Trusted CI profiles carry verifiable provenance or an artifact attestation before they are used as cross-workflow policy inputs.
+5. Lifecycle TCP, UDP, DNS, private address, host gateway, and cloud metadata attempts fail.
+6. Acquisition uses allowlisted public registry egress or an equivalent disposable host boundary with no sensitive routes.
+7. Child, grandchild, native executable, and shell activity remain observable.
+8. Tracer death and tracer diagnostics terminate tracees and produce `trace_incomplete`.
+9. Fake syscall lines, terminal control characters, and GitHub workflow commands cannot enter the trace channel.
+10. Process, memory, descriptor, file, output, syscall, and timeout exhaustion stop within limits and leave no container or image.
+11. Unsupported tracing fails closed without privileged mode, disabled seccomp, host namespaces, or broad capabilities.
+12. Ten repeated trusted fixture runs produce the same normalized behavior set and stable digest.
+13. Every added report item points to retained raw trace evidence.
+14. Trusted CI profiles carry verifiable provenance or an artifact attestation before they are used as cross-workflow policy inputs.
 
 ## Later options
 

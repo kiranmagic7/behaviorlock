@@ -274,13 +274,23 @@ func classifyResult(value string) (string, string) {
 
 func normalizePath(value string) string {
 	value = sanitize(value)
-	value = strings.ReplaceAll(value, "/home/scanner", "$HOME")
-	value = strings.ReplaceAll(value, "/work", "$WORK")
+	value = normalizeRoot(value, "/home/scanner", "$HOME")
+	value = normalizeRoot(value, "/work", "$WORK")
 	value = procPIDPattern.ReplaceAllString(value, "/proc/$PID")
 	value = tmpPattern.ReplaceAllString(value, "$TMP")
 	value = filepath.Clean(value)
 	if strings.HasPrefix(value, "../") || value == ".." {
 		return "$RELATIVE_ESCAPE/" + strings.TrimPrefix(value, "../")
+	}
+	return value
+}
+
+func normalizeRoot(value, root, replacement string) string {
+	if value == root {
+		return replacement
+	}
+	if strings.HasPrefix(value, root+"/") {
+		return replacement + strings.TrimPrefix(value, root)
 	}
 	return value
 }

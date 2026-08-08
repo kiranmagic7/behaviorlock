@@ -1,37 +1,79 @@
 # BehaviorLock
 
-BehaviorLock compares selected install lifecycle system calls observed for two exact versions of a public npm package.
+BehaviorLock shows how the observed install behavior of an npm package changes between two exact versions.
 
-It records a bounded subset of path based file calls, executable launches, and connection attempts exercised during `preinstall`, `install`, and `postinstall`. It then produces a normalized profile and a reviewable version diff for CI.
+Source review and vulnerability databases answer important questions about a dependency update. BehaviorLock asks another one: did the new version begin reading a credential path, starting a shell, changing files, or attempting a network connection when its install scripts ran?
+
+It records selected Linux system calls from both versions, normalizes the results, and produces a diff that a person can inspect or a CI job can evaluate.
 
 > [!WARNING]
-> The Docker capture backend is experimental. It is best effort observability, not a malware sandbox. Do not run unknown hostile packages on a personal workstation. Use an ephemeral GitHub hosted runner or a disposable virtual machine. BehaviorLock does not prove that a package is safe.
+> BehaviorLock is an experimental observation tool. It is not a malware sandbox and does not prove that a package is safe. Unknown packages belong on an ephemeral GitHub hosted runner or a disposable virtual machine, never on a personal workstation.
 
-## Why this exists
+## A simple example
 
-Dependency updates often receive a source diff and a vulnerability database lookup. Those checks can miss a simple question: did the new version begin doing something the previous version never did?
+Imagine that version 1.0.0 creates a cache directory during installation. Version 1.1.0 does the same thing, but also starts a shell and tries to read an SSH key path.
 
-BehaviorLock answers that narrow question with inspectable, environment qualified evidence. It records the resolved dependency lock digest and runner identity. A new shell process, credential path read, selected filesystem mutation, or connection attempt can become visible before a baseline changes.
+BehaviorLock reports the shell launch and credential path read as new observations. It does not decide why they happened. A maintainer reviews the evidence and decides whether the change is expected.
 
-## Current scope
+## Status at a glance
 
-Version `0.1.0-dev` deliberately supports one workflow:
+| Question | Current answer |
+| --- | --- |
+| Maturity | Public experiment, `0.1.0-dev` |
+| Package ecosystem | Public npm registry packages |
+| Version input | Exact semantic versions only |
+| Observed environment | Linux container install lifecycle |
+| CLI build and unit tests | Linux and macOS |
+| Full Docker integration | GitHub hosted Linux runner |
+| Native Windows or macOS tracing | Not supported |
+| Profile authenticity | Unsigned, not attested |
+| Tagged release | None |
 
-1. Public npm registry packages
-2. Exact semantic versions
-3. Linux containers
-4. npm install lifecycle scripts
-5. Offline script execution
-6. JSON, text, and Markdown diffs
+## What it observes
 
-Tags, ranges, Git dependencies, local paths, private registries, Windows, macOS tracing, runtime monitoring, and malware classification are outside this release.
+The current parser records a bounded subset of:
 
-## Quick start
+1. File reads, writes, creation, deletion, renaming, and permission changes
+2. Executable launches and up to 32 visible arguments
+3. Network connection attempts
+4. Whether an observed call succeeded, failed, or was blocked
 
-Go 1.23 or newer is enough for profile parsing and comparison.
+The capture path exercises npm `preinstall`, `install`, and `postinstall` scripts through `npm rebuild`. It does not observe normal application runtime behavior.
+
+## How it works
+
+```text
+exact npm version
+       |
+       v
+prepare without lifecycle scripts
+       |
+       v
+resolve immutable package filesystem
+       |
+       v
+run lifecycle offline under strace
+       |
+       v
+validate and normalize a profile
+       |
+       v
+compare two compatible profiles
+       |
+       v
+JSON, text, or Markdown report
+```
+
+Preparation and execution are separate. Preparation needs registry access and runs with lifecycle scripts disabled. Execution starts from the prepared filesystem, has no network, uses a read only root filesystem, receives no host mounts or inherited credentials, and runs package code as uid `65532` with zero effective capabilities.
+
+The preparation network is still a risk. Package metadata and transitive dependency metadata can influence what npm fetches. Use capture only on a disposable runner that cannot reach sensitive private networks or cloud metadata.
+
+## Try the comparison without Docker
+
+Go 1.23 or newer is required.
 
 ```bash
-go build -o bin/behaviorlock ./cmd/behaviorlock
+go build -trimpath -o bin/behaviorlock ./cmd/behaviorlock
 
 bin/behaviorlock profile \
   --package example@1.0.0 \
@@ -51,70 +93,142 @@ bin/behaviorlock compare \
   --output behaviorlock.report.md
 ```
 
-The comparison exits with `1` when an added observation reaches the configured `--fail-on` threshold. The default threshold is `high`.
+These traces are inert fixtures. Profiles created with `profile --trace` are marked `external-unverified`. Comparison rejects them unless `--allow-external` is present because their capture conditions and provenance cannot be verified.
 
-The sample traces are inert fixtures. `profile --trace` marks output as `external-unverified`, and comparison refuses those profiles unless `--allow-external` is present. External traces do not attest network isolation, sandboxing, or provenance.
+## Capture a public npm package
 
-All profile files are unsigned. Their provenance fields are claims, not cryptographic attestations, and can be edited. For policy enforcement, capture both versions inside the same trusted CI job and protect that workflow. Never accept a profile supplied or modified by an untrusted pull request as authoritative.
-
-> [!CAUTION]
-> Profiles and reports can contain sensitive paths and package controlled strings. Review them before uploading, attaching them to an issue, or committing them. BehaviorLock never captures file contents, but paths alone can still disclose private information.
-
-## Experimental capture
-
-Docker capture requires the repository runner image.
+Docker is required. Build the pinned runner image from this repository first.
 
 ```bash
 make runner
+make build
 bin/behaviorlock doctor
 
 bin/behaviorlock capture \
   --experimental \
-  --package example@1.0.0 \
+  --package is-number@7.0.0 \
   --timeout 2m \
-  --output example.profile.json
+  --output is-number.profile.json
 ```
 
-The explicit `--experimental` flag is intentional. Acquisition runs as a nonroot user in a disposable container with lifecycle scripts disabled. The resolved lockfile digest is recorded, then the filesystem is committed to a temporary image. Lifecycle execution runs offline with a read only root filesystem, no host mounts, no inherited credentials, and bounded runtime resources.
+`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, and dependency lock digest. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
 
-The trace supervisor and `strace` run under a different identity from package scripts. Trace files live in a root owned temporary filesystem that the package UID cannot read or modify. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` for the supervisor to change identity and trace inside the container PID namespace. The package runs as uid `65532` with zero effective capabilities.
+Do not capture an unknown package on a machine that contains valuable data, credentials, trusted workloads, or access to private infrastructure.
 
-The implementation rejects an empty trace, missing start or end sentinel, timeout, truncated stream, malformed completion marker, parser error, or tracer process failure. Those conditions return an incomplete result and exit code `2`. This removes known false pass paths, but it is not a complete hostile code guarantee.
+## Compare two captured versions
 
-## What a report means
+Both profiles must describe the same package and use the same runner image ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, and coverage scope.
 
-BehaviorLock uses four observation states:
+```bash
+bin/behaviorlock compare \
+  --baseline package-1.0.0.profile.json \
+  --candidate package-1.1.0.profile.json \
+  --fail-on high \
+  --format markdown \
+  --output behaviorlock.report.md
+```
 
-1. `success`
-2. `blocked`
-3. `failed`
-4. `unknown`
+The default threshold is `high`. Exit code `1` means an added observation reached the selected threshold. It does not mean the package is malicious.
 
-Added behavior receives a transparent review rule. For example, `BL100` marks a new access to a common credential path and `BL200` marks a network attempt during an offline run.
+## Reading a report
 
-These rules describe what the supplied profiles record. `pass` means only that no added observation reached the chosen comparison rule. It does not authenticate the profiles, infer intent, establish full coverage, or label a package as safe or malicious.
+| Rule | Level | Meaning |
+| --- | --- | --- |
+| `BL100` | Critical | New access to a common credential or secret path |
+| `BL200` | High | New network connection attempt during offline execution |
+| `BL300` | High | New shell, downloader, or remote access process |
+| `BL301` | Medium | New executable process |
+| `BL400` | High | New mutation outside disposable work and temporary roots |
+| `BL401` | Medium | New mutation inside a disposable writable root |
+| `BL402` | Medium | New deletion or permission change |
+| `BL500` | Low | New file read or metadata inspection |
+
+A `pass` verdict means no added observation reached the comparison rule. It does not authenticate the input profiles, establish full coverage, or prove safety.
+
+## Command reference
+
+```text
+behaviorlock doctor
+behaviorlock capture --experimental --package name@1.2.3 --output profile.json
+behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json
+behaviorlock compare --baseline old.json --candidate new.json --output report.json
+behaviorlock validate --profile profile.json
+behaviorlock version
+```
+
+Exit codes:
+
+1. `0` means the command completed and the comparison threshold was not reached.
+2. `1` means a comparison reached the selected review threshold.
+3. `2` means invalid input, incomplete evidence, sandbox failure, or another runtime error.
+
+## Platform support
+
+The Go parser and comparison code build and run on Linux and macOS. The capture backend observes Linux behavior because it depends on Linux containers, Linux permissions, and `strace`.
+
+Docker Desktop may allow a macOS or Windows host to operate a Linux container, but that still produces a Linux profile. Native Windows and native macOS behavior are outside this version, and Windows is not yet part of the CI build matrix.
+
+See [platform support](docs/PLATFORM_SUPPORT.md) for the exact distinction between host compatibility and observed target behavior.
 
 ## Security boundary
 
-Containers share the host kernel. Package code can detect Docker, `strace`, missing network access, timing changes, and fake credentials. It can stay dormant or behave differently elsewhere. `strace` cannot observe ordinary in process environment variable reads.
+The capture backend uses defense in depth:
 
-Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITATIONS.md) before using capture.
+1. Strict package input validation before Docker runs
+2. Docker argument arrays instead of host shell interpolation
+3. No host mounts, Docker socket, inherited home directory, inherited credentials, or Docker client proxy variables
+4. Offline lifecycle execution and a read only root filesystem
+5. Bounded memory, CPU, processes, descriptors, temporary storage, output, and wall clock time
+6. A root owned trace directory that package code cannot read or modify
+7. Immutable Docker content IDs for the runner and prepared package filesystem
+8. Required trace sentinels, completion evidence, and an empty tracer diagnostic channel
 
-## Repository status
+Containers still share a kernel. Package code can detect tracing, stay dormant, exploit a runtime vulnerability, or behave differently outside the harness. Profiles are unsigned JSON. `validate` checks structure and internal consistency, not authenticity.
 
-The parser and comparison core are tested locally. The capture backend remains experimental until the adversarial release gates in [the roadmap](ROADMAP.md) pass on GitHub hosted Linux runners. No tagged executable release is promised yet.
+Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITATIONS.md) before using capture as part of a security decision.
 
-## Contributing
+## Documentation
 
-Outside contributions are welcome. Significant behavior, schema, sandbox, or policy changes begin with an issue. Every commit must include a DCO signoff, and pull requests must pass the protected `ci-required` check.
+1. [User guide](docs/USER_GUIDE.md) explains the tool without requiring security expertise.
+2. [Technical reference](docs/TECHNICAL_REFERENCE.md) documents the pipeline, data model, comparability rules, and failure behavior.
+3. [Platform support](docs/PLATFORM_SUPPORT.md) describes Linux, macOS, and Windows support.
+4. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+5. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+6. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+7. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+8. [Roadmap](ROADMAP.md) contains the release gates.
+9. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md), and [SECURITY.md](SECURITY.md).
+## Development
+
+```bash
+make check
+make build
+```
+
+Docker integration runs separately:
+
+```bash
+make integration
+```
+
+The protected `ci-required` job runs race enabled tests, shell checks, schema checks, vulnerability scanning, DCO verification, and the hardened Docker integration. CodeQL and scheduled parser fuzzing run in separate workflows.
+
+## Project status
+
+BehaviorLock is a public experiment with no tagged release. The parser and comparison core are usable now. The capture backend remains experimental until every adversarial gate in [ROADMAP.md](ROADMAP.md) passes, trusted profiles have verifiable provenance, and the acquisition network boundary is stronger.
+
+Profiles and reports can retain sensitive paths and package controlled strings. Review every artifact before attaching it to an issue, publishing it, or committing it.
+
+## Contributing and security reports
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Human commits require Developer Certificate of Origin 1.1 signoff. Security vulnerabilities belong in [GitHub private vulnerability reporting](https://github.com/kiranmagic7/behaviorlock/security/advisories/new), not public issues.
 
 ## Name and prior work
 
-This repository uses the owner qualified name `kiranmagic7/behaviorlock`. It is independent of the earlier `christian140903-sudo/behaviorlock` project, which checks AI agent compatibility. The two projects have different purposes and no affiliation.
+This repository uses the owner qualified name `kiranmagic7/behaviorlock`. It is independent of the earlier `christian140903-sudo/behaviorlock` project, which checks AI agent compatibility. The projects have different purposes and no affiliation.
 
-BehaviorLock also does not claim ownership of the phrase “Bill of Behavior” and does not present itself as a new standard. [ORIGINS.md](docs/ORIGINS.md) records adjacent projects and the boundaries of this implementation.
+BehaviorLock does not claim ownership of the phrase "Bill of Behavior" and does not present itself as a standard. [ORIGINS.md](docs/ORIGINS.md) records adjacent projects and the boundaries of this implementation.
 
 ## License
 

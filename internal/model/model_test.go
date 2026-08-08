@@ -6,17 +6,19 @@ import (
 	"testing"
 )
 
+const testRegistryIntegrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 func testProfile() Profile {
 	profile := NewProfile(Subject{
 		Ecosystem:            "npm",
 		Name:                 "example",
 		Version:              "1.2.3",
 		PURL:                 "pkg:npm/example@1.2.3",
-		RegistryIntegrity:    "sha512-test",
+		RegistryIntegrity:    testRegistryIntegrity,
 		DependencyLockSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}, "test")
 	profile.Capture.RunnerImage = "behaviorlock-runner:test"
-	profile.Capture.RunnerImageID = "sha256:runner"
+	profile.Capture.RunnerImageID = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	profile.Capture.Architecture = "amd64"
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
@@ -150,6 +152,34 @@ func TestValidateProfileRejectsContradictoryCompletion(t *testing.T) {
 	profile.Result.TimedOut = true
 	if err := ValidateProfile(profile); err == nil {
 		t.Fatal("timed out complete profile unexpectedly validated")
+	}
+}
+
+func TestValidateProfileRejectsMalformedAcquisitionEvidence(t *testing.T) {
+	t.Parallel()
+	profile := testProfile()
+	profile.Subject.RegistryIntegrity = "sha512-not-a-real-digest"
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("malformed registry integrity unexpectedly validated")
+	}
+	profile = testProfile()
+	profile.Capture.RunnerImageID = "behaviorlock-runner:mutable"
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("mutable runner image reference unexpectedly validated as an ID")
+	}
+}
+
+func TestValidateProfileRejectsUnsafeCoverage(t *testing.T) {
+	t.Parallel()
+	profile := testProfile()
+	profile.Capture.Coverage.Limitations = []string{"unsafe\nworkflow command"}
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("unsafe coverage limitation unexpectedly validated")
+	}
+	profile = testProfile()
+	profile.Capture.Coverage.Completeness = "complete"
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("unsupported coverage completeness unexpectedly validated")
 	}
 }
 

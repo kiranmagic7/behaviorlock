@@ -20,7 +20,7 @@ Known scanners already cover vulnerabilities, metadata, and static patterns. Ins
 
 ## Tradeoffs
 
-The narrow scope produces less dramatic claims and better testability. Offline execution improves containment and reduces coverage. Docker improves accessibility but cannot provide a hostile code isolation guarantee.
+The narrow scope produces less dramatic claims and better testability. Offline execution improves containment and reduces coverage. Docker improves accessibility but cannot provide a hostile code isolation guarantee. Acquisition network isolation is weaker than lifecycle isolation and must remain visible as a release blocker.
 
 ## Risk and reversibility
 

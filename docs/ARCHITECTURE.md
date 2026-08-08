@@ -8,19 +8,21 @@ The first release accepts only an npm registry name followed by an exact semanti
 
 Docker commands are created as argument arrays. User input is never placed inside a host shell command, container name, image name, mount, environment variable name, or Docker option.
 
+The local runner tag is resolved to one validated Docker content ID before capture. Metadata inspection and preparation use that immutable ID. The committed package filesystem is also executed by the content ID returned from `docker commit`, not by its temporary tag.
+
 ## Observation
 
 Capture has two disposable container phases.
 
-The preparation phase installs an exact top level package version with lifecycle scripts disabled and records the generated dependency lock digest. It runs as uid `65532` and receives no host mounts, home directory, npm configuration, Git configuration, SSH material, cloud credentials, repository token, or Docker socket.
+The preparation phase installs an exact top level package version with lifecycle scripts disabled and records the generated dependency lock digest. It runs as uid `65532` and receives no host mounts, home directory, npm configuration, Git configuration, SSH material, cloud credentials, repository token, or Docker socket. Standard uppercase and lowercase proxy variables are explicitly empty, which prevents Docker client proxy settings from being injected. Preparation still has direct registry network access, so package and transitive dependency metadata can influence outbound fetches. It belongs on a disposable runner with no route to sensitive private services.
 
 The execution phase starts from the prepared filesystem. Networking is disabled. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` so the supervisor can perform the identity transition and trace inside the container PID namespace. The package process has zero effective capabilities. Docker's default seccomp policy remains intact.
 
-`strace` writes into a root owned mode `0700` temporary filesystem that package code cannot access. It follows a selected set of file, process, and network syscalls. Package output is separated from the trace envelope. Root owned start and end sentinel reads and a completion footer establish basic channel integrity. Missing or malformed completion evidence makes the profile incomplete.
+`strace` writes into a root owned mode `0700` temporary filesystem that package code cannot access. It follows a selected set of file, process, and network syscalls. Package output is separated from the trace envelope. Root owned start and end sentinel reads, an empty tracer diagnostic channel, and a completion footer establish basic channel integrity. Missing evidence, tracer diagnostics, timeout, truncation, or malformed completion evidence makes the profile incomplete.
 
 ## Normalization
 
-The parser has byte, line, and behavior limits. It rejects invalid UTF 8 and unfinished syscalls. It normalizes only known disposable paths and process identifiers:
+The parser has byte, line, and behavior limits. It rejects invalid UTF 8 and unfinished syscalls. It normalizes only known disposable roots at exact path boundaries and selected process identifiers:
 
 1. `/work` becomes `$WORK`
 2. `/home/scanner` becomes `$HOME`
