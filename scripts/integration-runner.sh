@@ -7,6 +7,17 @@ trace_output="$temp_dir/envelope.txt"
 raw_trace="$temp_dir/raw.strace"
 profile="$temp_dir/profile.json"
 
+require_trace_match() {
+  pattern="$1"
+  description="$2"
+  if grep -Eq -- "$pattern" "$trace_output"; then
+    return
+  fi
+  echo "fixture trace check failed: $description" >&2
+  sed -n '1,240p' "$trace_output" >&2
+  exit 1
+}
+
 docker build --pull=false --tag behaviorlock-runner-fixture:dev testdata/npm-fixture
 
 docker run --rm \
@@ -38,10 +49,10 @@ docker run --rm \
   --env npm_config_update_notifier=false \
   behaviorlock-runner-fixture:dev trace behaviorlock-fixture@1.0.0 > "$trace_output"
 
-grep -qx 'BEHAVIORLOCK_TRACE_V1' "$trace_output"
-grep -Eq '^BEHAVIORLOCK_TRACE_END exit=0$' "$trace_output"
-grep -Eq '/proc/self/status' "$trace_output"
-grep -Eq '/trace.*(EACCES|EPERM)' "$trace_output"
+require_trace_match '^BEHAVIORLOCK_TRACE_V1$' 'missing trace header'
+require_trace_match '^BEHAVIORLOCK_TRACE_END exit=0$' 'lifecycle or tracer returned nonzero'
+require_trace_match '/proc/self/status' 'fixture did not inspect its effective capabilities'
+require_trace_match '/trace.*(EACCES|EPERM)' 'package code was not denied access to the trace directory'
 if grep -q 'BEHAVIORLOCK_CANARY_DO_NOT_USE' "$trace_output"; then
   echo "trace disclosed canary secret contents" >&2
   exit 1
