@@ -17,6 +17,7 @@ All notable changes will be documented here. The project follows Keep a Changelo
 9. Root owned trace channel separated from the package uid
 10. Semantic JSON Schema conformance tests
 11. Explicit `attestation: none` provenance boundary for unsigned profiles
+12. Separate user guide, platform support guide, technical reference, and security audit record
 
 ### Security
 
@@ -24,3 +25,8 @@ All notable changes will be documented here. The project follows Keep a Changelo
 2. Empty, incomplete, timed out, truncated, malformed, or sentinel missing traces are rejected.
 3. Package input cannot control Docker flags, images, mounts, environment names, or container names.
 4. External traces require explicit acknowledgement before comparison.
+5. Runner and prepared package images execute by immutable Docker content ID after resolution.
+6. Any `strace` diagnostic fails capture before a trusted completion footer is emitted.
+7. Runtime profile validation now enforces npm integrity, content ID, coverage, and behavior limits.
+8. Path normalization applies only at genuine disposable root boundaries.
+9. Docker client proxy variables are explicitly cleared in every runner container.

@@ -25,9 +25,11 @@ The important boundaries are:
 
 Only exact registry versions are accepted. Docker is invoked with argument arrays. Package input cannot alter images, entrypoints, mounts, environment variables, container names, or Docker flags.
 
+Capture resolves mutable local image tags to validated SHA 256 content IDs before use. Preparation and execution use those immutable IDs so a concurrent local retag cannot change the environment after profile evidence is collected.
+
 ### Credential exposure
 
-The container environment is an allowlist. Host environment variables and user configuration are not inherited. Host home, repository, Docker socket, SSH files, npm configuration, and cloud credentials are never mounted.
+The container environment is an allowlist. Host environment variables and user configuration are not inherited. Host home, repository, Docker socket, SSH files, npm configuration, and cloud credentials are never mounted. Uppercase and lowercase proxy variables are explicitly set to empty because Docker client configuration can otherwise inject proxy values into new containers.
 
 Fake credential files are placed inside the disposable container so access attempts can be observed without exposing real secrets.
 
@@ -35,7 +37,7 @@ Fake credential files are placed inside the disposable container so access attem
 
 Lifecycle execution uses Docker network mode `none`. Connect attempts can still appear in `strace`, but they cannot reach an external destination through the container network.
 
-The preparation phase has registry access while scripts are disabled. This reduces risk but does not make acquisition harmless. A vulnerability in npm, the container runtime, or the host kernel remains possible.
+The preparation phase has registry access while scripts are disabled. This reduces risk but does not make acquisition harmless. Package and transitive dependency metadata can influence npm fetch destinations. A disposable runner must not have routes to private services, cloud metadata, or trusted local infrastructure. An allowlisted acquisition network remains a release blocker.
 
 ### Host modification
 
@@ -47,7 +49,7 @@ Docker bounds memory, process count, CPU, file descriptors, shared memory, and r
 
 ### Trace tampering
 
-The trace supervisor and `strace` run separately from the package uid. The supervisor retains `SYS_PTRACE` only inside the container PID namespace; the package runs as uid `65532` with zero effective capabilities. Root owned mode `0700` trace storage prevents the package from erasing or replacing raw trace files. Start and end sentinel reads, a nonempty recognized event set, a footer, and tracer exit status must all be present. A missing sentinel, tracer failure, timeout, parser error, or output limit yields an incomplete result.
+The trace supervisor and `strace` run separately from the package uid. The supervisor retains `SYS_PTRACE` only inside the container PID namespace; the package runs as uid `65532` with zero effective capabilities. Root owned mode `0700` trace storage prevents the package from erasing or replacing raw trace files. Start and end sentinel reads, a nonempty recognized event set, an empty root owned tracer diagnostic file, a footer, and tracer exit status must all be present. A missing sentinel, tracer diagnostic, timeout, parser error, or output limit yields an incomplete result.
 
 Package code can still detect tracing, alter its own behavior, attack the shared kernel, or exploit a tracer or runtime vulnerability. A tagged executable release remains blocked until broader adversarial tests show that package output cannot enter the trace channel and tracees terminate when the tracer dies.
 
@@ -59,7 +61,7 @@ Profile JSON is not signed. A contributor can forge provenance fields in a file.
 
 ## Residual risk
 
-Containers are not virtual machines. Docker and `strace` do not contain every hostile package. Rootless Docker, user namespace remapping, Docker Desktop's virtual machine, or a disposable Linux virtual machine reduces risk. Unknown hostile packages should not run on a personal workstation.
+Containers are not virtual machines. Docker and `strace` do not contain every hostile package. Rootless Docker, user namespace remapping, Docker Desktop's virtual machine, or a disposable Linux virtual machine reduces risk. Acquisition can still reach destinations available to the Docker bridge. Unknown hostile packages should not run on a personal workstation or a network trusted host.
 
 ## Security release gate
 

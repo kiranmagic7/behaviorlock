@@ -3,6 +3,8 @@ package model
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +23,9 @@ const (
 	DiffSchemaVersion    = "1.0.0"
 	ProfileKind          = "npm.install.profile"
 	DiffKind             = "npm.install.diff"
+	maxProfileBehaviors  = 250_000
+	maxBehaviorCount     = 250_000
+	maxCoverageLimits    = 64
 )
 
 type ToolInfo struct {
@@ -227,7 +232,7 @@ func ValidateProfile(p Profile) error {
 	if p.Kind != ProfileKind {
 		return fmt.Errorf("unsupported profile kind %q", p.Kind)
 	}
-	if p.Tool.Name != "behaviorlock" || !safeField(p.Tool.Version, 128) {
+	if p.Tool.Name != "behaviorlock" || p.Tool.Version == "" || !safeField(p.Tool.Version, 128) {
 		return errors.New("profile tool identity is invalid")
 	}
 	if p.Subject.Ecosystem != "npm" {
@@ -237,7 +242,7 @@ func ValidateProfile(p Profile) error {
 	if err != nil || p.Subject.PURL != spec.PURL() {
 		return errors.New("profile subject name, version, and purl are inconsistent")
 	}
-	if p.Subject.RegistryIntegrity != "" && !strings.HasPrefix(p.Subject.RegistryIntegrity, "sha512-") {
+	if p.Subject.RegistryIntegrity != "" && !ValidRegistryIntegrity(p.Subject.RegistryIntegrity) {
 		return errors.New("profile registry integrity is invalid")
 	}
 	if p.Subject.TarballSHA256 != "" && !validDigest(p.Subject.TarballSHA256) {
@@ -269,6 +274,15 @@ func ValidateProfile(p Profile) error {
 	if p.Capture.Attestation != "none" {
 		return errors.New("unsupported profile attestation")
 	}
+	if !safeField(p.Capture.RunnerImage, 256) || !safeField(p.Capture.RunnerImageID, 256) ||
+		!safeField(p.Capture.Architecture, 64) || !safeField(p.Capture.NodeVersion, 64) ||
+		!safeField(p.Capture.NPMVersion, 64) || !safeField(p.Capture.StraceVersion, 64) ||
+		!safeField(p.Capture.SandboxProfile, 128) {
+		return errors.New("capture metadata contains unsafe text")
+	}
+	if err := validateCoverage(p.Capture.Coverage); err != nil {
+		return err
+	}
 	switch p.Capture.TraceIntegrity {
 	case "isolated-root-tracer":
 		if p.Capture.NetworkMode != "none" || p.Capture.SandboxProfile != "behaviorlock-linux-npm-v1" {
@@ -287,15 +301,18 @@ func ValidateProfile(p Profile) error {
 					return fmt.Errorf("captured profile %s is missing or unsafe", name)
 				}
 			}
+			if !validDigest(p.Capture.RunnerImageID) {
+				return errors.New("captured profile runner image id is invalid")
+			}
 			if p.Subject.RegistryIntegrity == "" || p.Subject.DependencyLockSHA256 == "" {
 				return errors.New("captured profile is missing acquisition provenance")
 			}
 		}
-		if p.Capture.Coverage.Scope != "registry-install-lifecycle" || !sameStrings(p.Capture.Coverage.Lifecycle, []string{"install", "postinstall", "preinstall"}) {
+		if p.Capture.Coverage.Scope != "registry-install-lifecycle" || p.Capture.Coverage.Completeness != "partial" || !sameStrings(p.Capture.Coverage.Lifecycle, []string{"install", "postinstall", "preinstall"}) {
 			return errors.New("captured profile coverage is inconsistent")
 		}
 	case "external-unverified":
-		if p.Capture.NetworkMode != "unknown" || p.Capture.SandboxProfile != "external-unverified" || p.Capture.Coverage.Scope != "external-strace" {
+		if p.Capture.NetworkMode != "unknown" || p.Capture.SandboxProfile != "external-unverified" || p.Capture.Coverage.Scope != "external-strace" || p.Capture.Coverage.Completeness != "unverified" || len(p.Capture.Coverage.Lifecycle) != 0 {
 			return errors.New("external profile must not attest sandbox conditions")
 		}
 	default:
@@ -306,6 +323,9 @@ func ValidateProfile(p Profile) error {
 	}
 	if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && len(p.Behaviors) == 0 {
 		return errors.New("completed profile contains no recognized behavior")
+	}
+	if len(p.Behaviors) > maxProfileBehaviors {
+		return fmt.Errorf("profile exceeds %d behaviors", maxProfileBehaviors)
 	}
 	for index, behavior := range p.Behaviors {
 		if err := validateBehavior(behavior); err != nil {
@@ -347,6 +367,9 @@ func ReadProfile(path string) (Profile, error) {
 		return Profile{}, err
 	}
 	profile.Normalize()
+	if err := ValidateProfile(profile); err != nil {
+		return Profile{}, fmt.Errorf("normalized profile: %w", err)
+	}
 	return profile, nil
 }
 
@@ -367,7 +390,7 @@ func validateBehavior(behavior Behavior) error {
 			return errors.New("argument is unsafe")
 		}
 	}
-	if len(behavior.Arguments) > 32 || behavior.Count < 1 {
+	if len(behavior.Arguments) > 32 || behavior.Count < 1 || behavior.Count > maxBehaviorCount {
 		return errors.New("argument or count limit is invalid")
 	}
 	switch behavior.Outcome {
@@ -380,6 +403,26 @@ func validateBehavior(behavior Behavior) error {
 	}
 	if _, err := hex.DecodeString(strings.TrimPrefix(behavior.Evidence, "event:sha256:")); err != nil {
 		return errors.New("stable evidence identifier is invalid")
+	}
+	return nil
+}
+
+func validateCoverage(coverage CaptureCoverage) error {
+	if !safeField(coverage.Scope, 64) || !safeField(coverage.Completeness, 64) ||
+		len(coverage.Lifecycle) > 3 || len(coverage.Limitations) > maxCoverageLimits {
+		return errors.New("profile capture coverage exceeds its limits")
+	}
+	for _, lifecycle := range coverage.Lifecycle {
+		switch lifecycle {
+		case "preinstall", "install", "postinstall":
+		default:
+			return errors.New("profile capture lifecycle is invalid")
+		}
+	}
+	for _, limitation := range coverage.Limitations {
+		if limitation == "" || !safeField(limitation, 1024) {
+			return errors.New("profile capture limitation is unsafe")
+		}
 	}
 	return nil
 }
@@ -402,6 +445,15 @@ func validDigest(value string) bool {
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	return err == nil
+}
+
+func ValidRegistryIntegrity(value string) bool {
+	const prefix = "sha512-"
+	if !strings.HasPrefix(value, prefix) || len(value) > 256 || !safeField(value, 256) {
+		return false
+	}
+	digest, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(value, prefix))
+	return err == nil && len(digest) == sha512.Size
 }
 
 func sameStrings(left, right []string) bool {

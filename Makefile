@@ -19,9 +19,9 @@ check:
 	test -z "$$(gofmt -l cmd internal schemas)"
 	go vet ./...
 	go test -race ./...
-	sh -n runner/*.sh scripts/*.sh
+	sh -n runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
 	command -v shellcheck >/dev/null
-	shellcheck runner/*.sh scripts/*.sh
+	shellcheck runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	jq empty schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json
 

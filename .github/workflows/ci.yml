@@ -35,8 +35,8 @@ jobs:
         run: go vet ./...
       - name: Check shell syntax and style
         run: |
-          sh -n runner/*.sh scripts/*.sh
-          shellcheck runner/*.sh scripts/*.sh
+          sh -n runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
+          shellcheck runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
       - name: Validate workflows and JSON contracts
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7

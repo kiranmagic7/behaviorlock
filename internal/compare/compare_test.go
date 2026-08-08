@@ -6,13 +6,15 @@ import (
 	"github.com/kiranmagic7/behaviorlock/internal/model"
 )
 
+const testRegistryIntegrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 func completeProfile(version string, behaviors ...model.Behavior) model.Profile {
 	profile := model.NewProfile(model.Subject{
 		Ecosystem: "npm", Name: "example", Version: version, PURL: "pkg:npm/example@" + version,
-		RegistryIntegrity: "sha512-test", DependencyLockSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RegistryIntegrity: testRegistryIntegrity, DependencyLockSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}, "test")
 	profile.Capture.RunnerImage = "behaviorlock-runner:test"
-	profile.Capture.RunnerImageID = "sha256:runner"
+	profile.Capture.RunnerImageID = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	profile.Capture.Architecture = "amd64"
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
