@@ -7,6 +7,7 @@ if [ -z "$package_name" ] || [ "$package_name" = "$package_spec" ]; then
   exit 64
 fi
 cat /opt/behaviorlock/sentinel-start >/dev/null || exit 70
+cd /work || exit 72
 set +e
 npm rebuild --offline --foreground-scripts --no-audit --no-fund -- "$package_name"
 command_exit=$?
