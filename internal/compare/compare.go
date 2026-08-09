@@ -152,9 +152,29 @@ func classify(behavior model.Behavior) (string, string, string) {
 	case "filesystem.delete", "filesystem.permission":
 		return "medium", "BL402", "new destructive or permission changing filesystem operation"
 	case "filesystem.read":
+		if isEnvironmentFingerprintPath(behavior.Target) {
+			return "medium", "BL600", "new access to a path commonly used to detect containers or tracing"
+		}
 		return "low", "BL500", "new filesystem read or metadata inspection"
 	default:
 		return "low", "BL900", "new observed behavior"
+	}
+}
+
+func isEnvironmentFingerprintPath(target string) bool {
+	switch target {
+	case "/.dockerenv",
+		"/run/.containerenv",
+		"/proc/$PID/cgroup",
+		"/proc/self/status",
+		"/proc/self/mountinfo",
+		"/proc/cpuinfo",
+		"/proc/meminfo",
+		"/proc/uptime",
+		"/sys/class/dmi":
+		return true
+	default:
+		return strings.HasPrefix(target, "/sys/class/dmi/")
 	}
 }
 

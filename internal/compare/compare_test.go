@@ -43,6 +43,111 @@ func TestProfilesFlagsNewSensitiveRead(t *testing.T) {
 	}
 }
 
+func TestProfilesFlagsNewEnvironmentFingerprintRead(t *testing.T) {
+	t.Parallel()
+	baseline := completeProfile("1.0.0")
+	candidate := completeProfile("1.1.0", model.Behavior{
+		Type: "filesystem.read", Operation: "inspect", Target: "/proc/self/status",
+		Outcome: "success", Count: 1, Evidence: "trace:L1", SourceCall: "openat",
+	})
+	diff, err := Profiles(baseline, candidate, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.Summary.Verdict != "review" || diff.Summary.HighestRisk != "medium" || len(diff.Added) != 1 {
+		t.Fatalf("unexpected diff summary: %#v", diff.Summary)
+	}
+	change := diff.Added[0]
+	if change.RuleID != "BL600" || change.Risk != "medium" {
+		t.Fatalf("unexpected environment fingerprint classification: %#v", change)
+	}
+}
+
+func TestClassifyEnvironmentFingerprintPaths(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		target  string
+		outcome string
+	}{
+		{name: "docker marker", target: "/.dockerenv", outcome: "success"},
+		{name: "container marker", target: "/run/.containerenv", outcome: "failed"},
+		{name: "init cgroup", target: "/proc/$PID/cgroup", outcome: "success"},
+		{name: "tracer status", target: "/proc/self/status", outcome: "success"},
+		{name: "mount layout", target: "/proc/self/mountinfo", outcome: "blocked"},
+		{name: "cpu characteristics", target: "/proc/cpuinfo", outcome: "success"},
+		{name: "memory characteristics", target: "/proc/meminfo", outcome: "success"},
+		{name: "system uptime", target: "/proc/uptime", outcome: "success"},
+		{name: "dmi root", target: "/sys/class/dmi", outcome: "success"},
+		{name: "dmi child", target: "/sys/class/dmi/id/product_name", outcome: "success"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			risk, ruleID, reason := classify(model.Behavior{
+				Type: "filesystem.read", Operation: "inspect", Target: test.target,
+				Outcome: test.outcome, Count: 1, SourceCall: "openat",
+			})
+			if risk != "medium" || ruleID != "BL600" || reason != "new access to a path commonly used to detect containers or tracing" {
+				t.Fatalf("classification = %q %q %q", risk, ruleID, reason)
+			}
+		})
+	}
+}
+
+func TestClassifyEnvironmentFingerprintPathsRequiresBoundaries(t *testing.T) {
+	t.Parallel()
+	lookalikes := []string{
+		"/.dockerenv.bak",
+		"/.dockerenv/child",
+		"/run/.containerenv-old",
+		"/proc/$PID/cgroup-copy",
+		"/proc/self/status-old",
+		"/proc/self/mountinfo.backup",
+		"/proc/cpuinfo-copy",
+		"/proc/meminfo/extra",
+		"/proc/uptime2",
+		"/sys/class/dmi-fake/id",
+		"$WORK/sys/class/dmi/id/product_name",
+	}
+	for _, target := range lookalikes {
+		target := target
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			risk, ruleID, _ := classify(model.Behavior{
+				Type: "filesystem.read", Operation: "inspect", Target: target,
+				Outcome: "success", Count: 1, SourceCall: "openat",
+			})
+			if risk != "low" || ruleID != "BL500" {
+				t.Fatalf("lookalike %q classified as %q %q", target, risk, ruleID)
+			}
+		})
+	}
+}
+
+func TestClassifySensitiveReadPrecedesEnvironmentFingerprintRule(t *testing.T) {
+	t.Parallel()
+	risk, ruleID, _ := classify(model.Behavior{
+		Type: "filesystem.read", Operation: "read", Target: "/proc/self/status",
+		Outcome: "success", Sensitive: true, Count: 1, SourceCall: "openat",
+	})
+	if risk != "critical" || ruleID != "BL100" {
+		t.Fatalf("sensitive environment read classified as %q %q", risk, ruleID)
+	}
+}
+
+func TestClassifyOrdinaryReadUsesBL500(t *testing.T) {
+	t.Parallel()
+	risk, ruleID, reason := classify(model.Behavior{
+		Type: "filesystem.read", Operation: "read", Target: "/etc/hosts",
+		Outcome: "success", Count: 1, SourceCall: "openat",
+	})
+	if risk != "low" || ruleID != "BL500" || reason != "new filesystem read or metadata inspection" {
+		t.Fatalf("ordinary read classification = %q %q %q", risk, ruleID, reason)
+	}
+}
+
 func TestProfilesRejectsIncompleteTrace(t *testing.T) {
 	t.Parallel()
 	baseline := completeProfile("1.0.0")

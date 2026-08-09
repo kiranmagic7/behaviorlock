@@ -111,6 +111,31 @@ func TestDiffSchemaAcceptsGeneratedDiff(t *testing.T) {
 	}
 }
 
+func TestDiffSchemaAcceptsEnvironmentFingerprintAndOrdinaryReadRules(t *testing.T) {
+	t.Parallel()
+	baseline := schemaProfile("1.0.0")
+	candidate := schemaProfile("1.1.0",
+		model.Behavior{
+			Type: "filesystem.read", Operation: "inspect", Target: "/proc/self/status",
+			Outcome: "success", Count: 1, SourceCall: "openat",
+		},
+		model.Behavior{
+			Type: "filesystem.read", Operation: "read", Target: "/etc/hosts",
+			Outcome: "success", Count: 1, SourceCall: "openat",
+		},
+	)
+	diff, err := compare.Profiles(baseline, candidate, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.Added) != 2 || diff.Added[0].RuleID != "BL600" || diff.Added[1].RuleID != "BL500" {
+		t.Fatalf("unexpected rules: %#v", diff.Added)
+	}
+	if err := compileSchema(t, "diff-v1.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDiffSchemaRejectsNumericRuleID(t *testing.T) {
 	t.Parallel()
 	baseline := schemaProfile("1.0.0")

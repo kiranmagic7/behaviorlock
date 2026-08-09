@@ -142,6 +142,9 @@ The default threshold is `high`. Exit code `1` means an added observation reache
 | `BL401` | Medium | New mutation inside a disposable writable root |
 | `BL402` | Medium | New deletion or permission change |
 | `BL500` | Low | New file read or metadata inspection |
+| `BL600` | Medium | New access to a path commonly used to detect containers or tracing |
+
+`BL600` covers exact normalized paths such as `/.dockerenv`, `/run/.containerenv`, selected `/proc` environment fingerprints, and `/sys/class/dmi` or its descendants. Boundary matching prevents lookalike paths from receiving this rule. These reads can be legitimate diagnostics; the rule reports evidence for review and does not establish evasive or malicious intent. This version is path based and does not yet add `ptrace` or timing-call coverage.
 
 A `pass` verdict means no added observation reached the comparison rule. It does not authenticate the input profiles, establish full coverage, or prove safety.
 
