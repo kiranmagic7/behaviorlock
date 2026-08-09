@@ -25,7 +25,7 @@ var (
 	quotedPattern   = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
 	pidPattern      = regexp.MustCompile(`^\[pid\s+[0-9]+\]\s+`)
 	plainPIDPattern = regexp.MustCompile(`^[0-9]+\s+`)
-	procPIDPattern  = regexp.MustCompile(`/proc/[0-9]+`)
+	procPIDPattern  = regexp.MustCompile(`/proc/[0-9]+(?:/|$)`)
 	tmpPattern      = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
 	portPattern     = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
 	ipv4Pattern     = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
@@ -274,7 +274,12 @@ func normalizePath(value string) string {
 	value = sanitize(value)
 	value = normalizeRoot(value, "/home/scanner", "$HOME")
 	value = normalizeRoot(value, "/work", "$WORK")
-	value = procPIDPattern.ReplaceAllString(value, "/proc/$PID")
+	value = procPIDPattern.ReplaceAllStringFunc(value, func(match string) string {
+		if strings.HasSuffix(match, "/") {
+			return "/proc/$PID/"
+		}
+		return "/proc/$PID"
+	})
 	value = tmpPattern.ReplaceAllString(value, "$TMP")
 	value = filepath.Clean(value)
 	if strings.HasPrefix(value, "../") || value == ".." {

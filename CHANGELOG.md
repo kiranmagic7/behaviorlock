@@ -24,6 +24,12 @@ All notable changes will be documented here. The project follows Keep a Changelo
 16. No-publish release dry run with archive and runner SBOMs
 17. Fail-closed 14-gate release proof validator and protected trusted-profile attestation workflow
 
+### Changed
+
+1. New reads of exact container, tracing, and environment fingerprint paths now receive medium review rule `BL600`.
+2. General file reads and metadata inspections keep low review rule `BL500`; sensitive-path rule `BL100` retains precedence.
+3. Numeric `/proc/<pid>` paths now normalize to the literal `/proc/$PID` token instead of collapsing the pid segment.
+
 ### Security
 
 1. Capture requires explicit experimental acknowledgement.

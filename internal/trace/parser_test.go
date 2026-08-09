@@ -56,6 +56,64 @@ func TestNormalizePathReplacesOnlyRootBoundaries(t *testing.T) {
 	}
 }
 
+func TestNormalizePathReplacesOnlyProcPIDBoundaries(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`openat(AT_FDCWD, "/proc/1/status", O_RDONLY) = 3`,
+		`openat(AT_FDCWD, "/proc/1", O_RDONLY) = 3`,
+		`openat(AT_FDCWD, "/proc/1-backup/status", O_RDONLY) = 3`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proc/$PID/status", "/proc/$PID", "/proc/1-backup/status"}
+	for index, target := range want {
+		if result.Behaviors[index].Target != target {
+			t.Fatalf("target %d = %q, want %q", index, result.Behaviors[index].Target, target)
+		}
+	}
+}
+
+func TestParseObservesEnvironmentFingerprintPaths(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`openat(AT_FDCWD, "/.dockerenv", O_RDONLY|O_CLOEXEC) = 3`,
+		`access("/run/.containerenv", F_OK) = -1 ENOENT (No such file or directory)`,
+		`stat("/proc/1/cgroup", {st_mode=S_IFREG|0444}) = 0`,
+		`openat(AT_FDCWD, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 4`,
+		`newfstatat(AT_FDCWD, "/proc/self/mountinfo", {st_mode=S_IFREG|0444}, 0) = 0`,
+		`openat(AT_FDCWD, "/proc/cpuinfo", O_RDONLY|O_CLOEXEC) = 5`,
+		`lstat("/proc/meminfo", {st_mode=S_IFREG|0444}) = 0`,
+		`readlink("/proc/uptime", 0x7ffc, 4095) = -1 EINVAL (Invalid argument)`,
+		`openat(AT_FDCWD, "/sys/class/dmi/id/product_name", O_RDONLY|O_CLOEXEC) = 6`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/.dockerenv",
+		"/run/.containerenv",
+		"/proc/$PID/cgroup",
+		"/proc/self/status",
+		"/proc/self/mountinfo",
+		"/proc/cpuinfo",
+		"/proc/meminfo",
+		"/proc/uptime",
+		"/sys/class/dmi/id/product_name",
+	}
+	if len(result.Behaviors) != len(want) {
+		t.Fatalf("got %d behaviors, want %d", len(result.Behaviors), len(want))
+	}
+	for index, target := range want {
+		behavior := result.Behaviors[index]
+		if behavior.Type != "filesystem.read" || behavior.Target != target {
+			t.Fatalf("behavior %d = %#v, want filesystem.read %q", index, behavior, target)
+		}
+	}
+}
+
 func TestParseEnvelopeRequiresCompletionMarker(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := ParseEnvelope([]byte("BEHAVIORLOCK_TRACE_V1\nexecve(\"/bin/true\", [\"true\"], 0x0) = 0\n"))

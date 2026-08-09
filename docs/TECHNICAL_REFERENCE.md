@@ -155,6 +155,24 @@ External traces require explicit `--allow-external` acknowledgement.
 
 The comparator calculates added and removed behavior keys. Added behavior is classified by deterministic rules in `internal/compare`.
 
+### Review rules
+
+| Rule | Level | Observation |
+| --- | --- | --- |
+| `BL100` | Critical | New access to a common credential or secret path |
+| `BL200` | High | New network connection attempt during offline execution |
+| `BL300` | High | New shell, downloader, or remote access process |
+| `BL301` | Medium | New executable process |
+| `BL400` | High | New mutation outside disposable work and temporary roots |
+| `BL401` | Medium | New mutation inside a disposable writable root |
+| `BL402` | Medium | New deletion or permission change |
+| `BL500` | Low | New file read or metadata inspection |
+| `BL600` | Medium | New access to a path commonly used to detect containers or tracing |
+
+`BL600` matches `/.dockerenv`, `/run/.containerenv`, normalized `/proc/$PID/cgroup`, `/proc/self/status`, `/proc/self/mountinfo`, `/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`, and `/sys/class/dmi` or a descendant. Exact or path-boundary matching prevents similarly named files from receiving the rule. Sensitive-path classification takes precedence as `BL100`. A match is an observation for review: diagnostic and platform-detection code can legitimately read these paths, so it does not prove sandbox evasion or malicious intent. This rule currently covers path-based observations only; `ptrace` and timing syscalls remain outside the parser's selected coverage.
+
+Numeric process paths normalize at a path boundary, so `/proc/123/status` becomes `/proc/$PID/status` while a lookalike such as `/proc/123-backup/status` stays unchanged. Earlier development profiles affected by the old replacement bug can contain a different target and stable digest. Recapture both versions with the same BehaviorLock commit before using such profiles in a comparison.
+
 ## CLI commands
 
 ### `doctor`
