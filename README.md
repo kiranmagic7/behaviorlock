@@ -9,11 +9,29 @@ It records selected Linux system calls from both versions, normalizes the result
 > [!WARNING]
 > BehaviorLock is an experimental observation tool. It is not a malware sandbox and does not prove that a package is safe. Unknown packages belong on an ephemeral GitHub hosted runner or a disposable virtual machine, never on a personal workstation.
 
-## A simple example
+## How it works in plain language
 
-Imagine that version 1.0.0 creates a cache directory during installation. Version 1.1.0 does the same thing, but also starts a shell and tries to read an SSH key path.
+Think of BehaviorLock as a security camera for `npm install`. You give it the old package version and the new one. It puts each version in a disposable Linux container, lets the install scripts run under observation, and records selected actions such as reading files, starting programs, changing files, and attempting network connections. It then removes routine trace noise and shows what the newer version did that the older version did not.
 
-BehaviorLock reports the shell launch and credential path read as new observations. It does not decide why they happened. A maintainer reviews the evidence and decides whether the change is expected.
+1. Confirm that both inputs are exact public npm versions.
+2. Download each version with install scripts disabled.
+3. Run the install scripts in a container with no network and no access to host files.
+4. Turn the raw Linux system calls into a readable behavior profile.
+5. Compare the two profiles and report the behavior added by the newer version.
+
+BehaviorLock does not call a package safe or malicious. It gives a reviewer evidence about what changed. A new action can be expected, suspicious, or harmless. A human decides.
+
+## What a diff looks like
+
+Version 1.1.0 does everything 1.0.0 did during install, plus three new things:
+
+| Level | Rule | Behavior | Target | Reason |
+| --- | --- | --- | --- | --- |
+| critical | `BL100` | `filesystem.read` | `$HOME/.ssh/id_rsa` | new access to a common credential or secret path |
+| high | `BL200` | `network.connect` | `AF_INET:198.51.100.1:443` | new network connection attempt during an offline lifecycle run |
+| high | `BL300` | `process.exec` | `/bin/sh` | new shell, downloader, or remote access process |
+
+This is the exact output produced by the inert fixtures in [`testdata/traces/`](testdata/traces). [`docs/EXAMPLE_DIFF.md`](docs/EXAMPLE_DIFF.md) contains the commands and full report. The example is reconstructed behavior, not a live package or a malware verdict.
 
 ## Status at a glance
 
@@ -198,6 +216,7 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 7. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
 8. [Roadmap](ROADMAP.md) contains the release gates.
 9. [Security policy](SECURITY.md) explains private vulnerability reporting.
+10. [Example diff](docs/EXAMPLE_DIFF.md) reproduces the offline demonstration and full report.
 
 ## Development
 
