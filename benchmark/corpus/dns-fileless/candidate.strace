@@ -1,0 +1,6 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
+socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 5
+sendto(5, "\0\1\1\0", 4, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("198.51.100.53")}, 16) = -1 ENETUNREACH (Network is unreachable)
+memfd_create("behaviorlock-inert", MFD_CLOEXEC) = 6
+execveat(6, "", ["inert-payload"], 0x0, AT_EMPTY_PATH) = -1 EACCES (Permission denied)
++++ exited with 0 +++

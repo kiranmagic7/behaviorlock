@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:behaviorlock:schema:benchmark-manifest:1",
+  "title": "BehaviorLock inert benchmark manifest",
+  "type": "object",
+  "required": ["schemaVersion", "corpusPolicy", "cases", "projectedHistoricalCoverage"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "corpusPolicy": {
+      "type": "object",
+      "required": ["sampleClass", "networkPolicy", "prohibitedContent"],
+      "properties": {
+        "sampleClass": { "const": "inert-reconstruction-only" },
+        "networkPolicy": { "const": "offline-trace-replay" },
+        "prohibitedContent": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 256 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "projectedHistoricalCoverage": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/projection" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "required": ["title", "url", "relationship"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "relationship": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["package", "trace"],
+      "properties": {
+        "package": { "type": "string", "minLength": 5, "maxLength": 343 },
+        "trace": { "type": "string", "pattern": "^corpus/[a-z0-9-]+/(baseline|candidate)\\.strace$" }
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": ["id", "title", "observedPhase", "reconstructionStatus", "baseline", "candidate", "citations", "expected", "unsupportedSignals"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "observedPhase": { "const": "external" },
+        "reconstructionStatus": { "const": "inert-handwritten" },
+        "baseline": { "$ref": "#/$defs/fixture" },
+        "candidate": { "$ref": "#/$defs/fixture" },
+        "citations": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/citation" } },
+        "expected": {
+          "type": "object",
+          "required": ["addedBehaviorTypes", "ruleIds", "highestReviewLevel"],
+          "properties": {
+            "addedBehaviorTypes": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 }, "uniqueItems": true },
+            "ruleIds": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "pattern": "^BL[0-9]{3}$" }, "uniqueItems": true },
+            "highestReviewLevel": { "enum": ["low", "medium", "high", "critical"] }
+          },
+          "additionalProperties": false
+        },
+        "unsupportedSignals": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "projection": {
+      "type": "object",
+      "required": ["id", "title", "status", "fixtureIds", "citations", "limitations"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "projection-only" },
+        "fixtureIds": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "uniqueItems": true },
+        "citations": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/citation" } },
+        "limitations": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    }
+  }
+}
