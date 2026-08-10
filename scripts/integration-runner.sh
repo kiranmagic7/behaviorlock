@@ -91,10 +91,9 @@ run_resource_trace_container() {
   temporary_size=32m
   trace_size=64m
   case "$fixture_mode" in
-    # Keep a container-wide reserve for the root-owned tracer and supervisor.
-    # The untrusted package runs as uid 65532 and reaches its lower RLIMIT_NPROC
-    # without starving trusted capture infrastructure of PID slots.
-    process) pids_limit=128; nproc_limit=16; memory_limit=512m ;;
+    # The fixture applies a lower RLIMIT_NPROC after the package uid transition.
+    # Keep container-wide headroom for the root-owned tracer and supervisor.
+    process) pids_limit=128; nproc_limit=128; memory_limit=512m ;;
     descriptor) nofile_limit=64 ;;
     tmpfs) work_size=4m ;;
     file) file_limit=1048576 ;;
