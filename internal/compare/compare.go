@@ -83,7 +83,7 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 		Limitations: []string{
 			"BehaviorLock compares observed install lifecycle behavior, not total package behavior.",
 			"A new behavior is a review signal and is not a malware classification.",
-			"Profiles are unsigned inputs. Structural validation does not establish authenticity or provenance.",
+			"Profiles and evidence companions are unsigned. Integrity verification does not establish producer authenticity or provenance.",
 		},
 	}
 	if baseline.Capture.TraceIntegrity == "external-unverified" {
@@ -91,8 +91,8 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 	}
 	for key, behavior := range candidateByKey {
 		if _, exists := baselineByKey[key]; !exists {
-			risk, ruleID, reason := classify(behavior)
-			diff.Added = append(diff.Added, model.Change{Risk: risk, RuleID: ruleID, Reason: reason, Behavior: behavior})
+			reviewLevel, ruleID, reason := classify(behavior)
+			diff.Added = append(diff.Added, model.Change{ReviewLevel: reviewLevel, RuleID: ruleID, Reason: reason, Behavior: behavior})
 		}
 	}
 	for key, behavior := range baselineByKey {
@@ -102,8 +102,8 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 	}
 	sort.Slice(diff.Added, func(i, j int) bool {
 		left, right := diff.Added[i], diff.Added[j]
-		if model.SeverityRank(left.Risk) != model.SeverityRank(right.Risk) {
-			return model.SeverityRank(left.Risk) > model.SeverityRank(right.Risk)
+		if model.ReviewLevelRank(left.ReviewLevel) != model.ReviewLevelRank(right.ReviewLevel) {
+			return model.ReviewLevelRank(left.ReviewLevel) > model.ReviewLevelRank(right.ReviewLevel)
 		}
 		return model.BehaviorKey(left.Behavior) < model.BehaviorKey(right.Behavior)
 	})
@@ -112,18 +112,16 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 	})
 	highest := "none"
 	for _, change := range diff.Added {
-		if model.SeverityRank(change.Risk) > model.SeverityRank(highest) {
-			highest = change.Risk
+		if model.ReviewLevelRank(change.ReviewLevel) > model.ReviewLevelRank(highest) {
+			highest = change.ReviewLevel
 		}
 	}
-	verdict := "pass"
-	if len(diff.Added) > 0 {
-		verdict = "review"
+	diff.Summary = model.DiffSummary{
+		Added:              len(diff.Added),
+		Removed:            len(diff.Removed),
+		ReviewRequired:     len(diff.Added) > 0,
+		HighestReviewLevel: highest,
 	}
-	if model.SeverityRank(highest) >= model.SeverityRank("high") {
-		verdict = "fail"
-	}
-	diff.Summary = model.DiffSummary{Added: len(diff.Added), Removed: len(diff.Removed), HighestRisk: highest, Verdict: verdict}
 	return diff, nil
 }
 

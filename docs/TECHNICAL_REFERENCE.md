@@ -103,7 +103,8 @@ Each behavior contains:
 | `errno` | Visible Linux error name when present |
 | `sensitive` | Whether the target matches a common credential path |
 | `count` | Number of equivalent raw observations |
-| `evidence` | Content derived event identifier |
+| `id` | Content-derived semantic behavior identifier |
+| `evidence` | One to eight raw artifact, line number, and exact line digest references |
 | `sourceSyscall` | Original syscall family |
 
 Disposable roots are normalized only at path boundaries:
@@ -125,22 +126,24 @@ Disposable roots are normalized only at path boundaries:
 4. Valid SHA 256 content IDs and digests
 5. Valid SHA 512 npm integrity evidence
 6. Consistent capture mode, coverage, lifecycle, and result state
-7. Behavior type, argument, count, evidence, and outcome limits
-8. No trailing JSON values or unknown fields
+7. Behavior type, argument, count, semantic ID, evidence reference, and outcome limits
+8. The complete companion evidence artifact digest and byte size
+9. Every referenced raw line digest and line boundary
+10. No trailing JSON values or unknown fields
 
-Validation is structural. Profiles have `attestation: none`, so successful validation does not establish who created a profile or whether its provenance fields are true.
+Validation proves that the supplied schema v2 profile and companion raw artifact agree. Profiles have `attestation: none`, so successful validation does not establish who created either artifact or whether the capture provenance fields are true. Schema v1 files remain published for historical decoding, but the current CLI rejects cross-version comparison and asks the caller to regenerate old profiles.
 
 ## Stable digest
 
 The stable profile digest includes subject identity, tool identity, capture environment, result state, and the normalized behavior set.
 
-It excludes duration, raw trace hash, repeated event counts, process IDs, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
+It excludes duration, evidence artifact metadata, evidence references, repeated event counts, process IDs, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
 
 ## Comparison contract
 
 Profiles must:
 
-1. Be structurally valid and complete
+1. Be structurally valid, evidence-verified, and complete
 2. Describe the same npm package
 3. Use the same trace integrity mode
 4. Use the same runner image ID and architecture
@@ -171,7 +174,7 @@ Compares two compatible profiles and writes JSON, text, or Markdown.
 
 ### `validate`
 
-Checks one profile and prints its stable digest. It explicitly states that authenticity was not verified.
+Checks one profile and its companion raw evidence, then prints the stable digest. It explicitly states that artifact integrity was verified while signer authenticity was not.
 
 ## Exit codes
 
@@ -183,7 +186,7 @@ Checks one profile and prints its stable digest. It explicitly states that authe
 
 ## Resource limits
 
-The trace parser accepts at most 64 MiB of raw trace data, 256 KiB per line, and 250,000 recognized behaviors. Profile JSON is limited to 32 MiB. Docker adds separate process, memory, CPU, file descriptor, shared memory, tmpfs, output, and wall clock limits.
+The trace parser and evidence verifier accept at most 64 MiB of raw trace data, 256 KiB per parsed line, 250,000 recognized behaviors, and eight retained evidence references per normalized behavior. Profile JSON is limited to 32 MiB. Docker adds separate process, memory, CPU, file descriptor, shared memory, tmpfs, output, and wall clock limits.
 
 ## Reproducibility
 

@@ -10,6 +10,8 @@
 | Release status | Experimental, no tag |
 | Overall decision | Suitable for continued public experimentation after the fixes in this change. Not approved as a malware sandbox or stable security product. |
 
+The schema v2 retained-evidence work was implemented after this reviewed base. Its local regression suite checks whole-artifact and exact-line tamper rejection, but it does not inherit this audit decision. A new review and hosted evidence are required before release gate 13 can be closed.
+
 ## Method
 
 The review combined:

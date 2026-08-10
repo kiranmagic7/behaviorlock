@@ -3,9 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
@@ -59,6 +56,7 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	packageValue := flags.String("package", "", "exact public npm package version")
 	output := flags.String("output", "-", "profile output path or - for stdout")
+	evidenceOutput := flags.String("evidence-output", "", "raw evidence output path; defaults beside a file profile")
 	timeout := flags.Duration("timeout", 2*time.Minute, "capture wall clock limit")
 	experimental := flags.Bool("experimental", false, "acknowledge the experimental capture boundary")
 	if err := flags.Parse(arguments); err != nil {
@@ -66,6 +64,11 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 	}
 	if flags.NArg() != 0 || !*experimental {
 		fmt.Fprintln(stderr, "behaviorlock: capture requires --experimental and accepts no positional arguments")
+		return 2
+	}
+	evidencePath, err := resolveEvidenceOutput(*output, *evidenceOutput)
+	if err != nil {
+		fmt.Fprintf(stderr, "behaviorlock: %s\n", safeText(err.Error()))
 		return 2
 	}
 	spec, err := npm.ParseExactSpec(*packageValue)
@@ -78,9 +81,9 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "behaviorlock: %s\n", safeText(err.Error()))
 		return 2
 	}
-	profile, captureErr := runner.Capture(context.Background(), spec, capture.Config{Timeout: *timeout, ToolVersion: Version})
+	profile, rawEvidence, captureErr := runner.CaptureWithEvidence(context.Background(), spec, capture.Config{Timeout: *timeout, ToolVersion: Version})
 	if profile.Subject.Name != "" {
-		if err := writeProfile(*output, profile); err != nil {
+		if err := writeProfileArtifacts(*output, evidencePath, rawEvidence, profile, stdout); err != nil {
 			fmt.Fprintf(stderr, "behaviorlock: write profile: %s\n", safeText(err.Error()))
 			return 2
 		}
@@ -90,7 +93,11 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *output != "-" {
-		fmt.Fprintf(stdout, "wrote %s with status %s\n", safeText(*output), profile.Result.Status)
+		if len(rawEvidence) > 0 {
+			fmt.Fprintf(stdout, "wrote %s and retained evidence %s with status %s\n", safeText(*output), safeText(evidencePath), profile.Result.Status)
+		} else {
+			fmt.Fprintf(stdout, "wrote %s with incomplete status %s; no verified raw evidence was available\n", safeText(*output), profile.Result.Status)
+		}
 	}
 	if profile.Result.Status != "complete" {
 		return 2
@@ -104,12 +111,18 @@ func runProfile(arguments []string, stdout, stderr io.Writer) int {
 	packageValue := flags.String("package", "", "exact npm package version")
 	tracePath := flags.String("trace", "", "raw strace input path")
 	output := flags.String("output", "-", "profile output path or - for stdout")
+	evidenceOutput := flags.String("evidence-output", "", "retained raw evidence output path; defaults beside a file profile")
 	commandExit := flags.Int("command-exit", 0, "observed lifecycle command exit code")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || *tracePath == "" || *commandExit < 0 || *commandExit > 255 {
 		fmt.Fprintln(stderr, "behaviorlock: profile requires --package and --trace")
+		return 2
+	}
+	evidencePath, err := resolveEvidenceOutput(*output, *evidenceOutput)
+	if err != nil {
+		fmt.Fprintf(stderr, "behaviorlock: %s\n", safeText(err.Error()))
 		return 2
 	}
 	spec, err := npm.ParseExactSpec(*packageValue)
@@ -151,20 +164,19 @@ func runProfile(arguments []string, stdout, stderr io.Writer) int {
 		Scope: "external-strace", Completeness: "unverified", Lifecycle: []string{},
 		Limitations: []string{"The caller supplied this trace; capture conditions and coverage are not attested."},
 	}
-	sum := sha256.Sum256(raw)
-	profile.Capture.RawTraceSHA256 = "sha256:" + hex.EncodeToString(sum[:])
 	profile.Behaviors = parsed.Behaviors
+	model.AttachEvidence(&profile, raw, "external-unverified", "external-strace")
 	profile.Result = model.Result{Status: "complete", ExitCode: *commandExit}
 	if *commandExit != 0 {
 		profile.Result.Status = "command_failed"
 	}
 	profile.Normalize()
-	if err := writeProfile(*output, profile); err != nil {
+	if err := writeProfileArtifacts(*output, evidencePath, raw, profile, stdout); err != nil {
 		fmt.Fprintf(stderr, "behaviorlock: write profile: %s\n", safeText(err.Error()))
 		return 2
 	}
 	if *output != "-" {
-		fmt.Fprintf(stdout, "wrote %s with %d normalized behaviors\n", safeText(*output), len(profile.Behaviors))
+		fmt.Fprintf(stdout, "wrote %s with %d normalized behaviors and retained unverified evidence %s\n", safeText(*output), len(profile.Behaviors), safeText(evidencePath))
 	}
 	return 0
 }
@@ -174,6 +186,8 @@ func runCompare(arguments []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	baselinePath := flags.String("baseline", "", "baseline profile path")
 	candidatePath := flags.String("candidate", "", "candidate profile path")
+	baselineEvidence := flags.String("baseline-evidence", "", "baseline raw evidence path; defaults beside the profile")
+	candidateEvidence := flags.String("candidate-evidence", "", "candidate raw evidence path; defaults beside the profile")
 	output := flags.String("output", "-", "report output path or - for stdout")
 	format := flags.String("format", "json", "json, text, or markdown")
 	failOn := flags.String("fail-on", "high", "none, low, medium, high, or critical")
@@ -185,16 +199,16 @@ func runCompare(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "behaviorlock: compare requires --baseline and --candidate")
 		return 2
 	}
-	if *failOn != "none" && model.SeverityRank(*failOn) == 0 {
+	if *failOn != "none" && model.ReviewLevelRank(*failOn) == 0 {
 		fmt.Fprintf(stderr, "behaviorlock: invalid --fail-on value %q\n", safeText(*failOn))
 		return 2
 	}
-	baseline, err := model.ReadProfile(*baselinePath)
+	baseline, err := readProfileWithEvidence(*baselinePath, *baselineEvidence)
 	if err != nil {
 		fmt.Fprintf(stderr, "behaviorlock: baseline: %s\n", safeText(err.Error()))
 		return 2
 	}
-	candidate, err := model.ReadProfile(*candidatePath)
+	candidate, err := readProfileWithEvidence(*candidatePath, *candidateEvidence)
 	if err != nil {
 		fmt.Fprintf(stderr, "behaviorlock: candidate: %s\n", safeText(err.Error()))
 		return 2
@@ -208,7 +222,7 @@ func runCompare(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "behaviorlock: write report: %s\n", safeText(err.Error()))
 		return 2
 	}
-	if *failOn != "none" && model.SeverityRank(diff.Summary.HighestRisk) >= model.SeverityRank(*failOn) {
+	if *failOn != "none" && model.ReviewLevelRank(diff.Summary.HighestReviewLevel) >= model.ReviewLevelRank(*failOn) {
 		return 1
 	}
 	return 0
@@ -218,6 +232,7 @@ func runValidate(arguments []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	profilePath := flags.String("profile", "", "profile path")
+	evidencePath := flags.String("evidence", "", "raw evidence path; defaults beside the profile")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -225,7 +240,7 @@ func runValidate(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "behaviorlock: validate requires --profile")
 		return 2
 	}
-	profile, err := model.ReadProfile(*profilePath)
+	profile, err := readProfileWithEvidence(*profilePath, *evidencePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "behaviorlock: invalid profile: %s\n", safeText(err.Error()))
 		return 2
@@ -235,7 +250,7 @@ func runValidate(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "behaviorlock: digest profile: %s\n", safeText(err.Error()))
 		return 2
 	}
-	fmt.Fprintf(stdout, "structurally valid %s %s %s; authenticity not verified\n", profile.Kind, profile.Subject.PURL, digest)
+	fmt.Fprintf(stdout, "structurally valid %s %s %s; raw evidence verified; signer authenticity not verified\n", profile.Kind, profile.Subject.PURL, digest)
 	return 0
 }
 
@@ -264,21 +279,75 @@ func runDoctor(arguments []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func writeProfile(path string, profile model.Profile) error {
+func writeProfileArtifacts(path, evidencePath string, raw []byte, profile model.Profile, stdout io.Writer) error {
 	profile.Normalize()
 	if err := model.ValidateProfile(profile); err != nil {
 		return err
 	}
+	if profile.Capture.EvidenceArtifact != nil {
+		if err := model.VerifyEvidence(profile, raw); err != nil {
+			return err
+		}
+		if err := model.WriteEvidence(evidencePath, raw); err != nil {
+			return err
+		}
+	} else if len(raw) != 0 {
+		return fmt.Errorf("profile does not declare the supplied raw evidence")
+	}
+	if path == "-" {
+		return model.EncodeJSON(stdout, profile)
+	}
 	return model.WriteJSON(path, profile)
+}
+
+func resolveEvidenceOutput(profilePath, requested string) (string, error) {
+	if requested == "-" {
+		return "", fmt.Errorf("raw evidence cannot share stdout with a profile")
+	}
+	if requested == "" {
+		if profilePath == "" || profilePath == "-" {
+			return "", fmt.Errorf("stdout profile output requires an explicit --evidence-output file")
+		}
+		requested = profilePath + ".evidence.strace"
+	}
+	if requested == profilePath {
+		return "", fmt.Errorf("profile and raw evidence outputs must be different files")
+	}
+	return requested, nil
+}
+
+func readProfileWithEvidence(profilePath, requestedEvidencePath string) (model.Profile, error) {
+	profile, err := model.ReadProfile(profilePath)
+	if err != nil {
+		return model.Profile{}, err
+	}
+	evidencePath := requestedEvidencePath
+	if evidencePath == "" {
+		evidencePath = profilePath + ".evidence.strace"
+	}
+	// #nosec G304 -- reading a caller-selected evidence path is the explicit local CLI contract.
+	file, err := os.Open(evidencePath)
+	if err != nil {
+		return model.Profile{}, fmt.Errorf("open raw evidence %s: %w", evidencePath, err)
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, trace.MaxTraceBytes+1))
+	if err != nil {
+		return model.Profile{}, fmt.Errorf("read raw evidence: %w", err)
+	}
+	if len(raw) > trace.MaxTraceBytes {
+		return model.Profile{}, fmt.Errorf("raw evidence exceeds %d bytes", trace.MaxTraceBytes)
+	}
+	if err := model.VerifyEvidence(profile, raw); err != nil {
+		return model.Profile{}, fmt.Errorf("verify raw evidence: %w", err)
+	}
+	return profile, nil
 }
 
 func writeDiff(path, format string, diff model.Diff, stdout io.Writer) error {
 	if format == "json" {
 		if path == "-" {
-			encoder := json.NewEncoder(stdout)
-			encoder.SetEscapeHTML(true)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(diff)
+			return model.EncodeJSON(stdout, diff)
 		}
 		return model.WriteJSON(path, diff)
 	}
@@ -303,10 +372,10 @@ func renderText(diff model.Diff) string {
 	fmt.Fprintf(&builder, "BehaviorLock observed install lifecycle diff\n")
 	fmt.Fprintf(&builder, "Package: %s\n", safeText(diff.Candidate.Name))
 	fmt.Fprintf(&builder, "Versions: %s to %s\n", safeText(diff.Baseline.Version), safeText(diff.Candidate.Version))
-	fmt.Fprintf(&builder, "Verdict: %s\n", diff.Summary.Verdict)
-	fmt.Fprintf(&builder, "Added: %d  Removed: %d  Highest risk: %s\n", diff.Summary.Added, diff.Summary.Removed, diff.Summary.HighestRisk)
+	fmt.Fprintf(&builder, "Review required: %t\n", diff.Summary.ReviewRequired)
+	fmt.Fprintf(&builder, "Added: %d  Removed: %d  Highest review level: %s\n", diff.Summary.Added, diff.Summary.Removed, diff.Summary.HighestReviewLevel)
 	for _, change := range diff.Added {
-		fmt.Fprintf(&builder, "[%s] %s %s %s (%s)\n", strings.ToUpper(change.Risk), change.RuleID, safeText(change.Behavior.Type), safeText(change.Behavior.Target), safeText(change.Reason))
+		fmt.Fprintf(&builder, "[%s] %s %s %s (%s) evidence=%s\n", strings.ToUpper(change.ReviewLevel), change.RuleID, safeText(change.Behavior.Type), safeText(change.Behavior.Target), safeText(change.Reason), evidenceLabel(change.Behavior))
 	}
 	for _, limitation := range diff.Limitations {
 		fmt.Fprintf(&builder, "Limitation: %s\n", safeText(limitation))
@@ -318,14 +387,14 @@ func renderMarkdown(diff model.Diff) string {
 	var builder strings.Builder
 	builder.WriteString("# BehaviorLock observed install lifecycle diff\n\n")
 	fmt.Fprintf(&builder, "Package: %s\n\n", markdownCode(diff.Candidate.Name))
-	fmt.Fprintf(&builder, "Compared %s with %s. Verdict: **%s**. Highest review level: **%s**.\n\n", markdownCode(diff.Baseline.Version), markdownCode(diff.Candidate.Version), markdown(diff.Summary.Verdict), markdown(diff.Summary.HighestRisk))
-	builder.WriteString("| Level | Rule | Behavior | Target | Reason |\n")
-	builder.WriteString("| --- | --- | --- | --- | --- |\n")
+	fmt.Fprintf(&builder, "Compared %s with %s. Review required: **%t**. Highest review level: **%s**.\n\n", markdownCode(diff.Baseline.Version), markdownCode(diff.Candidate.Version), diff.Summary.ReviewRequired, markdown(diff.Summary.HighestReviewLevel))
+	builder.WriteString("| Level | Rule | Behavior | Target | Evidence | Reason |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- |\n")
 	for _, change := range diff.Added {
-		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s |\n", markdown(change.Risk), markdownCode(change.RuleID), markdownCode(change.Behavior.Type), markdownCode(change.Behavior.Target), markdown(change.Reason))
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s |\n", markdown(change.ReviewLevel), markdownCode(change.RuleID), markdownCode(change.Behavior.Type), markdownCode(change.Behavior.Target), markdownCode(evidenceLabel(change.Behavior)), markdown(change.Reason))
 	}
 	if len(diff.Added) == 0 {
-		builder.WriteString("| none | none | none | none | No added observed behavior |\n")
+		builder.WriteString("| none | none | none | none | none | No added observed behavior |\n")
 	}
 	builder.WriteString("\n## Limitations\n\n")
 	for _, limitation := range diff.Limitations {
@@ -333,6 +402,22 @@ func renderMarkdown(diff model.Diff) string {
 	}
 	builder.WriteString("\nThis report compares behavior exercised during the selected npm install lifecycle. It does not classify malware or prove that either package version is safe.\n")
 	return builder.String()
+}
+
+func evidenceLabel(behavior model.Behavior) string {
+	if len(behavior.Evidence) == 0 {
+		return "none"
+	}
+	ref := behavior.Evidence[0]
+	digest := strings.TrimPrefix(ref.ArtifactSHA256, "sha256:")
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	label := fmt.Sprintf("sha256:%s:L%d", digest, ref.Line)
+	if len(behavior.Evidence) > 1 {
+		label += fmt.Sprintf(" (+%d refs)", len(behavior.Evidence)-1)
+	}
+	return label
 }
 
 func markdown(value string) string {
@@ -365,11 +450,11 @@ func printUsage(writer io.Writer) {
 
 Usage:
   behaviorlock doctor
-  behaviorlock capture --experimental --package name@1.2.3 --output profile.json
-  behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json
-  behaviorlock compare --baseline old.json --candidate new.json --output report.json
+  behaviorlock capture --experimental --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
+  behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json [--evidence-output retained.strace]
+  behaviorlock compare --baseline old.json --candidate new.json --output report.json [--baseline-evidence old.strace --candidate-evidence new.strace]
   behaviorlock compare --allow-external --baseline old.json --candidate new.json
-  behaviorlock validate --profile profile.json
+  behaviorlock validate --profile profile.json [--evidence raw.strace]
   behaviorlock version
 
 Exit codes:

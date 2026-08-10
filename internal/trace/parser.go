@@ -62,7 +62,7 @@ func Parse(reader io.Reader) (ParseResult, error) {
 			if strings.Contains(trimmed, "<unfinished ...>") || strings.Contains(trimmed, "resumed>") {
 				return ParseResult{}, fmt.Errorf("trace line %d contains an unfinished syscall", result.Stats.Lines)
 			}
-			if behavior, ok := parseLine(trimmed, result.Stats.Lines); ok {
+			if behavior, ok := parseLine(trimmed, model.NewEvidenceRef(result.Stats.Lines, []byte(line))); ok {
 				result.Behaviors = append(result.Behaviors, behavior)
 				result.Stats.RecognizedLines++
 				if len(result.Behaviors) > MaxBehaviors {
@@ -126,7 +126,7 @@ func hasSentinel(behaviors []model.Behavior, target string) bool {
 	return false
 }
 
-func parseLine(line string, lineNumber int) (model.Behavior, bool) {
+func parseLine(line string, evidence model.EvidenceRef) (model.Behavior, bool) {
 	line = pidPattern.ReplaceAllString(line, "")
 	line = plainPIDPattern.ReplaceAllString(line, "")
 	open := strings.IndexByte(line, '(')
@@ -136,8 +136,6 @@ func parseLine(line string, lineNumber int) (model.Behavior, bool) {
 	call := strings.TrimSpace(line[:open])
 	resultPart := syscallResult(line)
 	outcome, errno := classifyResult(resultPart)
-	evidence := fmt.Sprintf("trace:L%d", lineNumber)
-
 	switch call {
 	case "execve", "execveat":
 		quoted := extractQuoted(line)
@@ -151,7 +149,7 @@ func parseLine(line string, lineNumber int) (model.Behavior, bool) {
 		return model.Behavior{
 			Type: "process.exec", Operation: "exec", Target: normalizePath(quoted[0]),
 			Arguments: sanitizeValues(arguments), Outcome: outcome, Errno: errno,
-			Count: 1, Evidence: evidence, SourceCall: call,
+			Count: 1, Evidence: []model.EvidenceRef{evidence}, SourceCall: call,
 		}, true
 	case "connect":
 		family := firstMatch(familyPattern, line)
@@ -172,7 +170,7 @@ func parseLine(line string, lineNumber int) (model.Behavior, bool) {
 		}
 		return model.Behavior{
 			Type: "network.connect", Operation: "connect", Target: sanitize(target),
-			Outcome: outcome, Errno: errno, Count: 1, Evidence: evidence, SourceCall: call,
+			Outcome: outcome, Errno: errno, Count: 1, Evidence: []model.EvidenceRef{evidence}, SourceCall: call,
 		}, true
 	case "open", "openat", "openat2", "creat":
 		quoted := extractQuoted(line)
@@ -224,10 +222,10 @@ func parseLine(line string, lineNumber int) (model.Behavior, bool) {
 	}
 }
 
-func fileBehavior(kind, operation, target, call, outcome, errno, evidence string) model.Behavior {
+func fileBehavior(kind, operation, target, call, outcome, errno string, evidence model.EvidenceRef) model.Behavior {
 	return model.Behavior{
 		Type: kind, Operation: operation, Target: target, Outcome: outcome, Errno: errno,
-		Sensitive: isSensitivePath(target), Count: 1, Evidence: evidence, SourceCall: call,
+		Sensitive: isSensitivePath(target), Count: 1, Evidence: []model.EvidenceRef{evidence}, SourceCall: call,
 	}
 }
 

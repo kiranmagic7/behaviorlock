@@ -19,10 +19,15 @@ func completeProfile(version string, behaviors ...model.Behavior) model.Profile 
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
-	profile.Capture.RawTraceSHA256 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	profile.Result = model.Result{Status: "complete", ExitCode: 0}
 	harness := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/npm", Outcome: "success", Count: 1, SourceCall: "execve"}
 	profile.Behaviors = append([]model.Behavior{harness}, behaviors...)
+	raw := []byte("evidence-1\nevidence-2\nevidence-3\nevidence-4\n")
+	lines := [][]byte{[]byte("evidence-1\n"), []byte("evidence-2\n"), []byte("evidence-3\n"), []byte("evidence-4\n")}
+	for index := range profile.Behaviors {
+		profile.Behaviors[index].Evidence = []model.EvidenceRef{model.NewEvidenceRef(index+1, lines[index])}
+	}
+	model.AttachEvidence(&profile, raw, "retained", "behaviorlock-trace-v1-payload")
 	profile.Normalize()
 	return profile
 }
@@ -32,13 +37,13 @@ func TestProfilesFlagsNewSensitiveRead(t *testing.T) {
 	baseline := completeProfile("1.0.0")
 	candidate := completeProfile("1.1.0", model.Behavior{
 		Type: "filesystem.read", Operation: "read", Target: "$HOME/.ssh/id_rsa",
-		Outcome: "blocked", Errno: "EACCES", Sensitive: true, Count: 1, Evidence: "trace:L1", SourceCall: "openat",
+		Outcome: "blocked", Errno: "EACCES", Sensitive: true, Count: 1, SourceCall: "openat",
 	})
 	diff, err := Profiles(baseline, candidate, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff.Summary.Verdict != "fail" || diff.Summary.HighestRisk != "critical" || len(diff.Added) != 1 {
+	if !diff.Summary.ReviewRequired || diff.Summary.HighestReviewLevel != "critical" || len(diff.Added) != 1 {
 		t.Fatalf("unexpected diff summary: %#v", diff.Summary)
 	}
 }
@@ -55,8 +60,8 @@ func TestProfilesRejectsIncompleteTrace(t *testing.T) {
 
 func TestProfilesAreDeterministic(t *testing.T) {
 	t.Parallel()
-	a := model.Behavior{Type: "filesystem.read", Operation: "read", Target: "/etc/hosts", Outcome: "success", Count: 1, Evidence: "trace:L1", SourceCall: "openat"}
-	b := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/node", Outcome: "success", Count: 1, Evidence: "trace:L2", SourceCall: "execve"}
+	a := model.Behavior{Type: "filesystem.read", Operation: "read", Target: "/etc/hosts", Outcome: "success", Count: 1, SourceCall: "openat"}
+	b := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/node", Outcome: "success", Count: 1, SourceCall: "execve"}
 	left, err := Profiles(completeProfile("1.0.0"), completeProfile("1.1.0", a, b), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +86,8 @@ func TestProfilesRequireExplicitExternalAcknowledgement(t *testing.T) {
 		profile.Capture.Coverage.Scope = "external-strace"
 		profile.Capture.Coverage.Completeness = "unverified"
 		profile.Capture.Coverage.Lifecycle = []string{}
+		profile.Capture.EvidenceArtifact.Retention = "external-unverified"
+		profile.Capture.EvidenceArtifact.Envelope = "external-strace"
 		profile.Subject.RegistryIntegrity = ""
 		profile.Subject.DependencyLockSHA256 = ""
 	}

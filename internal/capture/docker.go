@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -85,8 +84,13 @@ func (runner *DockerRunner) Doctor(ctx context.Context) error {
 }
 
 func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config Config) (model.Profile, error) {
+	profile, _, err := runner.CaptureWithEvidence(ctx, spec, config)
+	return profile, err
+}
+
+func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Spec, config Config) (model.Profile, []byte, error) {
 	if config.Timeout < 10*time.Second || config.Timeout > 10*time.Minute {
-		return model.Profile{}, errors.New("capture timeout must be between 10 seconds and 10 minutes")
+		return model.Profile{}, nil, errors.New("capture timeout must be between 10 seconds and 10 minutes")
 	}
 	captureContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
@@ -98,11 +102,11 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	profile.Capture.TraceIntegrity = "isolated-root-tracer"
 	profile.Capture.Experimental = true
 	if err := runner.Doctor(captureContext); err != nil {
-		return timedOutProfile(profile, captureContext, err)
+		return withoutEvidence(timedOutProfile(profile, captureContext, err))
 	}
 	runID, err := randomID()
 	if err != nil {
-		return profile, err
+		return profile, nil, err
 	}
 	prepContainer := "behaviorlock-prep-" + runID
 	traceContainer := "behaviorlock-trace-" + runID
@@ -111,11 +115,11 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 
 	runnerImageID, architecture, err := runner.imageDetails(captureContext, RunnerImage)
 	if err != nil {
-		return timedOutProfile(profile, captureContext, err)
+		return withoutEvidence(timedOutProfile(profile, captureContext, err))
 	}
 	runnerMetadata, err := runner.runnerMetadata(captureContext, runnerImageID)
 	if err != nil {
-		return timedOutProfile(profile, captureContext, err)
+		return withoutEvidence(timedOutProfile(profile, captureContext, err))
 	}
 	profile.Capture.RunnerImageID = runnerImageID
 	profile.Capture.Architecture = architecture
@@ -126,25 +130,25 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 	prepareArgs := buildPrepareArgs(prepContainer, runnerImageID, spec.String())
 	created, err := runner.run(captureContext, prepareArgs, 64<<10, maxPreparationLog)
 	if err != nil || created.ExitCode != 0 {
-		return timedOutProfile(profile, captureContext, fmt.Errorf("create preparation container: %s", safeDiagnostic(created.Stderr)))
+		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("create preparation container: %s", safeDiagnostic(created.Stderr))))
 	}
 	prepared, err := runner.run(captureContext, []string{"start", "--attach", prepContainer}, maxPreparationLog, maxPreparationLog)
 	if err != nil || prepared.ExitCode != 0 || prepared.Truncated {
-		return timedOutProfile(profile, captureContext, fmt.Errorf("prepare package without lifecycle scripts: %s", safeDiagnostic(prepared.Stderr)))
+		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("prepare package without lifecycle scripts: %s", safeDiagnostic(prepared.Stderr))))
 	}
 	metadata, err := parsePrepareMetadata(prepared.Stdout)
 	if err != nil {
-		return profile, err
+		return profile, nil, err
 	}
 	profile.Subject.RegistryIntegrity = metadata.Integrity
 	profile.Subject.DependencyLockSHA256 = metadata.DependencyLockSHA256
 	committed, err := runner.run(captureContext, []string{"commit", "--pause=true", prepContainer, temporaryImage}, 64<<10, 64<<10)
 	if err != nil || committed.ExitCode != 0 {
-		return timedOutProfile(profile, captureContext, fmt.Errorf("commit disposable preparation image: %s", safeDiagnostic(committed.Stderr)))
+		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("commit disposable preparation image: %s", safeDiagnostic(committed.Stderr))))
 	}
 	preparedImageID := strings.TrimSpace(string(committed.Stdout))
 	if !validSHA256(preparedImageID) {
-		return profile, errors.New("committed preparation image did not resolve to a content ID")
+		return profile, nil, errors.New("committed preparation image did not resolve to a content ID")
 	}
 	_, _ = runner.run(captureContext, []string{"rm", "--force", prepContainer}, 64<<10, 64<<10)
 
@@ -155,31 +159,34 @@ func (runner *DockerRunner) Capture(ctx context.Context, spec npm.Spec, config C
 
 	if errors.Is(captureContext.Err(), context.DeadlineExceeded) {
 		profile.Result = model.Result{Status: "timed_out", ExitCode: 2, TimedOut: true, Message: "capture exceeded its wall clock limit"}
-		return profile, errors.New("capture timed out and was marked incomplete")
+		return profile, nil, errors.New("capture timed out and was marked incomplete")
 	}
 	if runErr != nil || traced.ExitCode != 0 {
 		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Message: safeDiagnostic(traced.Stderr)}
-		return profile, fmt.Errorf("trace container failed before a verified completion marker")
+		return profile, nil, fmt.Errorf("trace container failed before a verified completion marker")
 	}
 	if traced.Truncated {
 		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Truncated: true, Message: "trace output exceeded the capture limit"}
-		return profile, errors.New("trace output was truncated and cannot produce a verdict")
+		return profile, nil, errors.New("trace output was truncated and cannot produce a complete profile")
 	}
 	parsed, raw, commandExit, err := trace.ParseEnvelope(traced.Stdout)
 	if err != nil {
 		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Message: err.Error()}
-		return profile, fmt.Errorf("parse trace envelope: %w", err)
+		return profile, nil, fmt.Errorf("parse trace envelope: %w", err)
 	}
-	sum := sha256.Sum256(raw)
-	profile.Capture.RawTraceSHA256 = "sha256:" + hex.EncodeToString(sum[:])
 	profile.Behaviors = parsed.Behaviors
+	model.AttachEvidence(&profile, raw, "retained", "behaviorlock-trace-v1-payload")
 	profile.Result = model.Result{Status: "complete", ExitCode: commandExit}
 	if commandExit != 0 {
 		profile.Result.Status = "command_failed"
 		profile.Result.Message = "the selected lifecycle command returned a nonzero exit code"
 	}
 	profile.Normalize()
-	return profile, nil
+	return profile, raw, nil
+}
+
+func withoutEvidence(profile model.Profile, err error) (model.Profile, []byte, error) {
+	return profile, nil, err
 }
 
 func buildPrepareArgs(containerName, runnerImageID, packageSpec string) []string {

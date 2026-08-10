@@ -29,22 +29,23 @@ The parser has byte, line, and behavior limits. It rejects invalid UTF 8 and unf
 3. selected npm temporary roots become `$TMP`
 4. numeric `/proc` identifiers become `$PID`
 
-Behavior records are deduplicated, counted, sorted, and assigned content derived evidence identifiers. The semantic digest excludes duration, raw trace hash, and observation counts, but retains runner identity, subject, coverage, result, and normalized behavior meaning.
+Behavior records are deduplicated, counted, sorted, and assigned content-derived semantic identifiers. A separate mode `0600` raw evidence artifact is retained. Each normalized behavior carries up to eight references containing the artifact SHA 256, raw line number, and exact raw line SHA 256. Validation checks both the complete artifact and every reference before a profile can be compared.
+
+The semantic digest excludes duration, evidence artifact metadata, line references, and observation counts, but retains runner identity, subject, coverage, result, and normalized behavior meaning. Repeated captures can therefore have different evidence coordinates without changing the meaning digest.
 
 ## Comparison
 
 Two complete profiles for the same package and equivalent runner environment are compared as deterministic sets. External unverified traces require explicit caller acknowledgement. Added observations receive fixed rule identifiers and review levels. Removed observations are retained without being interpreted as safer.
 
-Profiles declare `attestation: none`. Environment fields allow honest comparability checks but are not authenticated. A future signed provenance format is a separate release gate.
+Profiles declare `attestation: none`. Environment fields and retained evidence allow consistency and comparability checks but are not authenticated. A future signed provenance format is a separate release gate.
 
-The default decision is:
+The report summary is:
 
-1. No added behavior: pass
-2. Added low or medium behavior: review
-3. Added high or critical behavior: fail
-4. Incomplete profile: error
+1. No added behavior: `reviewRequired: false` and `highestReviewLevel: none`
+2. Any added behavior: `reviewRequired: true` with the highest deterministic review level
+3. Incomplete or evidence-mismatched profile: error
 
-The CLI threshold controls its exit code. It does not rewrite the report verdict.
+The CLI threshold controls only its exit code. It does not rewrite the report or issue a package verdict.
 
 ## Stable extension points
 

@@ -7,7 +7,7 @@ Source review and vulnerability databases answer important questions about a dep
 It records selected Linux system calls from both versions, normalizes the results, and produces a diff that a person can inspect or a CI job can evaluate.
 
 > [!WARNING]
-> BehaviorLock is an experimental observation tool. It is not a malware sandbox and does not prove that a package is safe. Unknown packages belong on an ephemeral GitHub hosted runner or a disposable virtual machine, never on a personal workstation.
+> BehaviorLock is an experimental observation tool. It is not a malware sandbox and does not prove that a package is safe. Unknown packages belong in a dedicated disposable virtual machine with no credentials or private-network access, never on a personal workstation or privileged CI runner.
 
 ## A simple example
 
@@ -26,6 +26,7 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 | CLI build and unit tests | Linux and macOS |
 | Full Docker integration | GitHub hosted Linux runner |
 | Native Windows or macOS tracing | Not supported |
+| Evidence integrity | Raw trace retained separately and verified by digest and line references |
 | Profile authenticity | Unsigned, not attested |
 | Tagged release | None |
 
@@ -55,7 +56,7 @@ resolve immutable package filesystem
 run lifecycle offline under strace
        |
        v
-validate and normalize a profile
+retain evidence, validate, and normalize a profile
        |
        v
 compare two compatible profiles
@@ -95,6 +96,8 @@ bin/behaviorlock compare \
 
 These traces are inert fixtures. Profiles created with `profile --trace` are marked `external-unverified`. Comparison rejects them unless `--allow-external` is present because their capture conditions and provenance cannot be verified.
 
+Each profile command also creates a mode `0600` companion such as `baseline.profile.json.evidence.strace`. The profile records the artifact digest and bounded line references. `validate` and `compare` verify the whole artifact and every referenced line before accepting the profile. The raw trace can contain sensitive paths and process arguments; keep the companion private and review it before sharing.
+
 ## Capture a public npm package
 
 Docker is required. Build the pinned runner image from this repository first.
@@ -111,13 +114,13 @@ bin/behaviorlock capture \
   --output is-number.profile.json
 ```
 
-`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, and dependency lock digest. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
+`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, and dependency lock digest. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
 
 Do not capture an unknown package on a machine that contains valuable data, credentials, trusted workloads, or access to private infrastructure.
 
 ## Compare two captured versions
 
-Both profiles must describe the same package and use the same runner image ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, and coverage scope.
+Both profiles must describe the same package and use the same runner image ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, and coverage scope. Their companion evidence files must be present beside the profiles, or supplied with `--baseline-evidence` and `--candidate-evidence`.
 
 ```bash
 bin/behaviorlock compare \
@@ -143,16 +146,16 @@ The default threshold is `high`. Exit code `1` means an added observation reache
 | `BL402` | Medium | New deletion or permission change |
 | `BL500` | Low | New file read or metadata inspection |
 
-A `pass` verdict means no added observation reached the comparison rule. It does not authenticate the input profiles, establish full coverage, or prove safety.
+The report exposes `reviewRequired` and `highestReviewLevel`; it does not issue a package verdict. The CLI threshold controls only the process exit code. No observed addition, or an exit code of `0`, authenticates the profiles, establishes full coverage, or proves safety.
 
 ## Command reference
 
 ```text
 behaviorlock doctor
-behaviorlock capture --experimental --package name@1.2.3 --output profile.json
-behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json
-behaviorlock compare --baseline old.json --candidate new.json --output report.json
-behaviorlock validate --profile profile.json
+behaviorlock capture --experimental --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
+behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json [--evidence-output retained.strace]
+behaviorlock compare --baseline old.json --candidate new.json --output report.json [--baseline-evidence old.strace --candidate-evidence new.strace]
+behaviorlock validate --profile profile.json [--evidence raw.strace]
 behaviorlock version
 ```
 
@@ -182,8 +185,9 @@ The capture backend uses defense in depth:
 6. A root owned trace directory that package code cannot read or modify
 7. Immutable Docker content IDs for the runner and prepared package filesystem
 8. Required trace sentinels, completion evidence, and an empty tracer diagnostic channel
+9. Separate mode `0600` evidence artifacts whose full digest and referenced line digests are verified before comparison
 
-Containers still share a kernel. Package code can detect tracing, stay dormant, exploit a runtime vulnerability, or behave differently outside the harness. Profiles are unsigned JSON. `validate` checks structure and internal consistency, not authenticity.
+Containers still share a kernel. Package code can detect tracing, stay dormant, exploit a runtime vulnerability, or behave differently outside the harness. Profiles are unsigned JSON. `validate` checks structure, internal consistency, and retained raw evidence integrity; it does not verify who produced the artifacts.
 
 Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITATIONS.md) before using capture as part of a security decision.
 
@@ -192,12 +196,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 1. [User guide](docs/USER_GUIDE.md) explains the tool without requiring security expertise.
 2. [Technical reference](docs/TECHNICAL_REFERENCE.md) documents the pipeline, data model, comparability rules, and failure behavior.
 3. [Platform support](docs/PLATFORM_SUPPORT.md) describes Linux, macOS, and Windows support.
-4. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-5. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-6. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-7. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-8. [Roadmap](ROADMAP.md) contains the release gates.
-9. [Security policy](SECURITY.md) explains private vulnerability reporting.
+4. [Evidence model](docs/EVIDENCE_MODEL.md) defines retained artifacts, line references, validation, and privacy.
+5. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+6. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+7. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+8. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+9. [Roadmap](ROADMAP.md) contains the release gates.
+10. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 

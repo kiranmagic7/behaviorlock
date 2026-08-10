@@ -26,6 +26,8 @@ Every item below must pass on a GitHub hosted Linux runner:
 13. Every added report item points to retained raw trace evidence.
 14. Trusted CI profiles carry verifiable provenance or an artifact attestation before they are used as cross-workflow policy inputs.
 
+Gate 13 has a schema v2 implementation and local regression coverage. It remains a release gate until the hosted integration verifies companion creation, permissions, tamper rejection, and report references on the reviewed commit. No gate is considered closed solely because code exists on a feature branch.
+
 ## Later options
 
 Only after the first gate passes:

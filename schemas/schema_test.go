@@ -22,10 +22,15 @@ func schemaProfile(version string, behaviors ...model.Behavior) model.Profile {
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
-	profile.Capture.RawTraceSHA256 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	profile.Result = model.Result{Status: "complete", ExitCode: 0}
 	harness := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/npm", Outcome: "success", Count: 1, SourceCall: "execve"}
 	profile.Behaviors = append([]model.Behavior{harness}, behaviors...)
+	raw := []byte("evidence-1\nevidence-2\nevidence-3\nevidence-4\n")
+	lines := [][]byte{[]byte("evidence-1\n"), []byte("evidence-2\n"), []byte("evidence-3\n"), []byte("evidence-4\n")}
+	for index := range profile.Behaviors {
+		profile.Behaviors[index].Evidence = []model.EvidenceRef{model.NewEvidenceRef(index+1, lines[index])}
+	}
+	model.AttachEvidence(&profile, raw, "retained", "behaviorlock-trace-v1-payload")
 	profile.Normalize()
 	return profile
 }
@@ -56,7 +61,7 @@ func asJSONValue(t *testing.T, value any) any {
 func TestProfileSchemaAcceptsGeneratedProfile(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
-	if err := compileSchema(t, "profile-v1.schema.json").Validate(asJSONValue(t, profile)); err != nil {
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -65,7 +70,7 @@ func TestProfileSchemaRejectsContradictoryCompletion(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
 	profile.Result.TimedOut = true
-	if err := compileSchema(t, "profile-v1.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted complete profile with timedOut true")
 	}
 }
@@ -81,7 +86,9 @@ func TestProfileSchemaAcceptsExternalUnverifiedProfile(t *testing.T) {
 	profile.Capture.Coverage.Scope = "external-strace"
 	profile.Capture.Coverage.Completeness = "unverified"
 	profile.Capture.Coverage.Lifecycle = []string{}
-	if err := compileSchema(t, "profile-v1.schema.json").Validate(asJSONValue(t, profile)); err != nil {
+	profile.Capture.EvidenceArtifact.Retention = "external-unverified"
+	profile.Capture.EvidenceArtifact.Envelope = "external-strace"
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -90,7 +97,7 @@ func TestProfileSchemaRejectsEmptyCapturedLifecycle(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
 	profile.Capture.Coverage.Lifecycle = []string{}
-	if err := compileSchema(t, "profile-v1.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted captured profile with empty lifecycle coverage")
 	}
 }
@@ -106,7 +113,7 @@ func TestDiffSchemaAcceptsGeneratedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := compileSchema(t, "diff-v1.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -124,7 +131,13 @@ func TestDiffSchemaRejectsNumericRuleID(t *testing.T) {
 	}
 	value := asJSONValue(t, diff).(map[string]any)
 	value["added"].([]any)[0].(map[string]any)["ruleId"] = float64(100)
-	if err := compileSchema(t, "diff-v1.schema.json").Validate(value); err == nil {
+	if err := compileSchema(t, "diff-v2.schema.json").Validate(value); err == nil {
 		t.Fatal("schema accepted numeric ruleId")
 	}
+}
+
+func TestHistoricalSchemasRemainAvailable(t *testing.T) {
+	t.Parallel()
+	compileSchema(t, "profile-v1.schema.json")
+	compileSchema(t, "diff-v1.schema.json")
 }

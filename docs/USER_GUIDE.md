@@ -51,15 +51,15 @@ Each added behavior has a level:
 
 The level describes the observation, not the author's intent.
 
-## What verdicts mean
+## What the summary means
 
-`pass` means no added observation reached the configured threshold.
+`reviewRequired: false` means the comparison found no added normalized behavior.
 
-`review` means behavior changed, but the highest change remained below the failure level.
+`reviewRequired: true` means at least one added behavior needs human review. `highestReviewLevel` identifies the first group to inspect.
 
-`fail` means at least one added observation reached a high or critical review level.
+The `--fail-on` option controls the CLI exit code used by automation. It does not change the report or classify the package.
 
-None of these verdicts proves that a package is benign or malicious.
+None of these fields or exit codes proves that a package is benign or malicious.
 
 ## A sensible review process
 
@@ -78,15 +78,15 @@ BehaviorLock should support a review decision, not replace one.
 
 Use the fixture based quick start for learning. It does not execute downloaded package code.
 
-Real capture does execute package lifecycle code. Use an ephemeral GitHub hosted Linux runner or a disposable virtual machine with no valuable files, credentials, private network access, or cloud privileges.
+Real capture does execute package lifecycle code. Use a dedicated disposable virtual machine with no valuable files, credentials, private network access, or cloud privileges. Hosted CI should use inert fixtures unless its provider policy, isolation, and legal scope have been explicitly reviewed.
 
 Do not run an unknown package on a personal workstation. Docker reduces exposure, but containers share a kernel and are not a complete hostile code boundary.
 
 ## Privacy
 
-BehaviorLock does not capture file contents. It can still record sensitive paths, process arguments, package controlled strings, hostnames visible inside the container, and network destinations.
+BehaviorLock does not intentionally capture file contents. It retains the raw selected `strace` output in a separate mode `0600` companion file, so it can still record sensitive paths, process arguments, package controlled strings, hostnames visible inside the container, and network destinations.
 
-Review profiles and reports before sharing them. Remove private paths, repository names, internal addresses, and any other information that should not be public.
+The profile binds each behavior to the companion artifact with a full SHA 256 digest, line number, and exact line digest. `validate` and `compare` verify those references. This proves that the supplied profile and raw evidence agree; it does not authenticate their creator. Review profiles, evidence, and reports before sharing them. Remove private paths, repository names, internal addresses, and any other information that should not be public.
 
 ## Operating systems
 

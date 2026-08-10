@@ -11,6 +11,6 @@ Adjacent open source work shaped the boundary:
 5. [bob](https://github.com/k8sstormcenter/bob) and [bobctl](https://github.com/Vad1mo/bobctl) define vendor supplied behavior profiles for OCI and Kubernetes workloads.
 6. [Behaviorlock by Christian Bucher](https://github.com/christian140903-sudo/behaviorlock) compares recorded AI agent behavior across model and prompt changes.
 
-BehaviorLock's intended contribution is narrower: environment qualified profiles for two exact npm versions, a transparent set diff, content derived evidence identifiers, and a CI decision that never claims to classify malware.
+BehaviorLock's intended contribution is narrower: environment-qualified profiles for two exact npm versions, a transparent set diff, content-derived behavior identifiers, verifiable references into separately retained raw evidence, and a CI threshold that never claims to classify malware.
 
 No source code from these projects was copied into this repository.

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kiranmagic7/behaviorlock/internal/model"
 	"github.com/kiranmagic7/behaviorlock/internal/npm"
 )
 
@@ -129,7 +130,7 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := runner.Capture(context.Background(), spec, Config{Timeout: time.Minute, ToolVersion: "test"})
+	profile, rawEvidence, err := runner.CaptureWithEvidence(context.Background(), spec, Config{Timeout: time.Minute, ToolVersion: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +139,12 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 	}
 	if profile.Subject.RegistryIntegrity != testRegistryIntegrity || profile.Capture.RunnerImageID != testRunnerImageID {
 		t.Fatalf("capture evidence is incomplete: %#v", profile)
+	}
+	if len(rawEvidence) == 0 || profile.Capture.EvidenceArtifact == nil {
+		t.Fatal("capture did not retain raw evidence metadata and bytes")
+	}
+	if err := model.VerifyEvidence(profile, rawEvidence); err != nil {
+		t.Fatalf("retained capture evidence did not verify: %v", err)
 	}
 }
 

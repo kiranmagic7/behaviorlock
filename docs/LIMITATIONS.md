@@ -15,10 +15,10 @@ BehaviorLock observes one narrow execution path. The following limits are part o
 11. A comparable profile depends on the same runner image, architecture, Node version, npm version, and harness. The generated dependency lock digest records, but does not eliminate, dependency graph variation.
 12. The Debian base image is pinned, but live operating system packages installed during a runner build are not snapshot pinned. Use the exact runner image ID for comparison.
 13. The acquisition phase has a wall clock limit and memory controls but no portable Docker overlay disk quota. It also has registry network access, and dependency metadata can influence fetch destinations. Use a disposable runner with no route to private networks, cloud metadata, or trusted services.
-14. Raw traces are hashed but not retained by default. Content derived evidence identifiers are stable references to normalized records, not a substitute for raw forensic evidence.
+14. Raw traces are retained by default in separate mode `0600` companion files and bound to normalized records by artifact and line digests. Retention improves reviewability but does not prove that the observed execution was complete or authentic.
 15. An incomplete trace is an error, but a complete trace still cannot prove full coverage or prevent evasive dormant behavior.
-16. Profiles can retain sensitive paths and package controlled strings. Review artifacts before sharing them.
-17. Profiles are unsigned JSON. Validation checks structure and internal consistency, not authenticity. Enforcement workflows must generate profiles in a trusted job rather than accepting contributor supplied artifacts.
+16. Profiles and raw companions can retain sensitive paths, visible process arguments, and package controlled strings. Review every artifact before sharing it.
+17. Profiles and evidence companions are unsigned. Validation checks structure, whole-artifact integrity, and exact line references, not producer authenticity. Enforcement workflows must generate profiles in a trusted job rather than accepting contributor supplied artifacts.
 18. The Go CLI is tested on Linux and macOS, but full capture is verified only on GitHub hosted Linux. Native Windows and macOS tracing are not implemented.
 
 BehaviorLock reports observations and changes. It does not report that a package is safe, clean, benign, malicious, or free of vulnerabilities.

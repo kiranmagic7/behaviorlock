@@ -6,6 +6,7 @@ trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 trace_output="$temp_dir/envelope.txt"
 raw_trace="$temp_dir/raw.strace"
 profile="$temp_dir/profile.json"
+profile_evidence="$profile.evidence.strace"
 
 run_trace_container() {
   runner_image="$1"
@@ -83,12 +84,48 @@ go run ./cmd/behaviorlock profile \
   --output "$profile"
 go run ./cmd/behaviorlock validate --profile "$profile"
 
+test -s "$profile_evidence"
+if [ "$(stat -c '%a' "$profile_evidence")" != "600" ]; then
+  echo "raw evidence companion permissions are not 0600" >&2
+  exit 1
+fi
+tampered_evidence="$temp_dir/tampered.strace"
+cp "$profile_evidence" "$tampered_evidence"
+printf 'tampered\n' >> "$tampered_evidence"
+if go run ./cmd/behaviorlock validate --profile "$profile" --evidence "$tampered_evidence" >/dev/null 2>&1; then
+  echo "validate accepted tampered raw evidence" >&2
+  exit 1
+fi
+
 grep -q '"type": "network.connect"' "$profile"
 # $HOME is the literal normalized path token in the JSON profile.
 # shellcheck disable=SC2016
 grep -q '"target": "$HOME/.ssh/id_rsa"' "$profile"
 grep -q '"sensitive": true' "$profile"
 grep -q '"target": "/bin/sh"' "$profile"
+
+baseline_profile="$temp_dir/baseline.profile.json"
+candidate_profile="$temp_dir/candidate.profile.json"
+diff_report="$temp_dir/diff.json"
+go run ./cmd/behaviorlock profile \
+  --package example@1.0.0 \
+  --trace testdata/traces/baseline.strace \
+  --output "$baseline_profile"
+go run ./cmd/behaviorlock profile \
+  --package example@1.1.0 \
+  --trace testdata/traces/candidate.strace \
+  --output "$candidate_profile"
+go run ./cmd/behaviorlock compare \
+  --allow-external \
+  --baseline "$baseline_profile" \
+  --candidate "$candidate_profile" \
+  --format json \
+  --fail-on none \
+  --output "$diff_report"
+grep -q '"reviewRequired": true' "$diff_report"
+grep -q '"highestReviewLevel": "critical"' "$diff_report"
+grep -q '"artifactSha256": "sha256:' "$diff_report"
+grep -q '"lineSha256": "sha256:' "$diff_report"
 
 capture_profile="$temp_dir/capture.profile.json"
 go build -trimpath -o "$temp_dir/behaviorlock" ./cmd/behaviorlock
@@ -98,6 +135,7 @@ go build -trimpath -o "$temp_dir/behaviorlock" ./cmd/behaviorlock
   --timeout 3m \
   --output "$capture_profile"
 "$temp_dir/behaviorlock" validate --profile "$capture_profile"
+test -s "$capture_profile.evidence.strace"
 grep -q '"traceIntegrity": "isolated-root-tracer"' "$capture_profile"
 grep -q '"dependencyLockSha256": "sha256:' "$capture_profile"
 

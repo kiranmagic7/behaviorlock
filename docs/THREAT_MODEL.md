@@ -57,7 +57,7 @@ Package code can still detect tracing, alter its own behavior, attack the shared
 
 Pull request workflows use GitHub hosted runners, read only repository permissions, no secrets, and the `pull_request` event. `pull_request_target` and self hosted runners are prohibited for untrusted contribution code.
 
-Profile JSON is not signed. A contributor can forge provenance fields in a file. A policy workflow must capture both versions itself after checkout, must not trust profiles from the pull request, and must keep its workflow definition under code owner review. Structural `validate` output is not an authenticity decision.
+Profile JSON and its raw evidence companion are not signed. A contributor can forge both artifacts and their provenance fields together. The current validator proves that the pair agrees by checking the whole artifact digest and each exact line reference; it does not authenticate the producer. A policy workflow must capture both versions itself after checkout, must not trust profiles or evidence from the pull request, and must keep its workflow definition under code owner review.
 
 ## Residual risk
 

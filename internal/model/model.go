@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -19,13 +20,20 @@ import (
 )
 
 const (
-	ProfileSchemaVersion = "1.0.0"
-	DiffSchemaVersion    = "1.0.0"
+	ProfileSchemaVersion = "2.0.0"
+	DiffSchemaVersion    = "2.0.0"
 	ProfileKind          = "npm.install.profile"
 	DiffKind             = "npm.install.diff"
 	maxProfileBehaviors  = 250_000
 	maxBehaviorCount     = 250_000
 	maxCoverageLimits    = 64
+	maxEvidenceRefs      = 8
+	maxEvidenceBytes     = 64 << 20
+)
+
+const (
+	EvidenceMediaType = "application/vnd.behaviorlock.strace"
+	EvidenceFormat    = "strace-lines-v1"
 )
 
 type ToolInfo struct {
@@ -51,20 +59,35 @@ type CaptureCoverage struct {
 }
 
 type CaptureInfo struct {
-	RunnerImage    string          `json:"runnerImage,omitempty"`
-	RunnerImageID  string          `json:"runnerImageId,omitempty"`
-	Architecture   string          `json:"architecture,omitempty"`
-	NodeVersion    string          `json:"nodeVersion,omitempty"`
-	NPMVersion     string          `json:"npmVersion,omitempty"`
-	StraceVersion  string          `json:"straceVersion,omitempty"`
-	NetworkMode    string          `json:"networkMode"`
-	SandboxProfile string          `json:"sandboxProfile"`
-	RawTraceSHA256 string          `json:"rawTraceSha256"`
-	TraceIntegrity string          `json:"traceIntegrity"`
-	Attestation    string          `json:"attestation"`
-	DurationMillis int64           `json:"durationMillis,omitempty"`
-	Coverage       CaptureCoverage `json:"coverage"`
-	Experimental   bool            `json:"experimental"`
+	RunnerImage      string            `json:"runnerImage,omitempty"`
+	RunnerImageID    string            `json:"runnerImageId,omitempty"`
+	Architecture     string            `json:"architecture,omitempty"`
+	NodeVersion      string            `json:"nodeVersion,omitempty"`
+	NPMVersion       string            `json:"npmVersion,omitempty"`
+	StraceVersion    string            `json:"straceVersion,omitempty"`
+	NetworkMode      string            `json:"networkMode"`
+	SandboxProfile   string            `json:"sandboxProfile"`
+	TraceIntegrity   string            `json:"traceIntegrity"`
+	Attestation      string            `json:"attestation"`
+	DurationMillis   int64             `json:"durationMillis,omitempty"`
+	Coverage         CaptureCoverage   `json:"coverage"`
+	EvidenceArtifact *EvidenceArtifact `json:"evidenceArtifact,omitempty"`
+	Experimental     bool              `json:"experimental"`
+}
+
+type EvidenceArtifact struct {
+	SHA256    string `json:"sha256"`
+	ByteSize  int64  `json:"byteSize"`
+	MediaType string `json:"mediaType"`
+	Format    string `json:"format"`
+	Retention string `json:"retention"`
+	Envelope  string `json:"envelope"`
+}
+
+type EvidenceRef struct {
+	ArtifactSHA256 string `json:"artifactSha256"`
+	Line           int    `json:"line"`
+	LineSHA256     string `json:"lineSha256"`
 }
 
 type Result struct {
@@ -76,16 +99,17 @@ type Result struct {
 }
 
 type Behavior struct {
-	Type       string   `json:"type"`
-	Operation  string   `json:"operation"`
-	Target     string   `json:"target"`
-	Arguments  []string `json:"arguments,omitempty"`
-	Outcome    string   `json:"outcome"`
-	Errno      string   `json:"errno,omitempty"`
-	Sensitive  bool     `json:"sensitive,omitempty"`
-	Count      int      `json:"count"`
-	Evidence   string   `json:"evidence"`
-	SourceCall string   `json:"sourceSyscall"`
+	Type       string        `json:"type"`
+	Operation  string        `json:"operation"`
+	Target     string        `json:"target"`
+	Arguments  []string      `json:"arguments,omitempty"`
+	Outcome    string        `json:"outcome"`
+	Errno      string        `json:"errno,omitempty"`
+	Sensitive  bool          `json:"sensitive,omitempty"`
+	Count      int           `json:"count"`
+	ID         string        `json:"id"`
+	Evidence   []EvidenceRef `json:"evidence"`
+	SourceCall string        `json:"sourceSyscall"`
 }
 
 type Profile struct {
@@ -99,17 +123,17 @@ type Profile struct {
 }
 
 type Change struct {
-	Risk     string   `json:"risk"`
-	RuleID   string   `json:"ruleId"`
-	Reason   string   `json:"reason"`
-	Behavior Behavior `json:"behavior"`
+	ReviewLevel string   `json:"reviewLevel"`
+	RuleID      string   `json:"ruleId"`
+	Reason      string   `json:"reason"`
+	Behavior    Behavior `json:"behavior"`
 }
 
 type DiffSummary struct {
-	Added       int    `json:"-"`
-	Removed     int    `json:"-"`
-	HighestRisk string `json:"highestRisk"`
-	Verdict     string `json:"verdict"`
+	Added              int    `json:"-"`
+	Removed            int    `json:"-"`
+	ReviewRequired     bool   `json:"reviewRequired"`
+	HighestReviewLevel string `json:"highestReviewLevel"`
 }
 
 type Diff struct {
@@ -158,9 +182,11 @@ func (p *Profile) Normalize() {
 	counts := make(map[string]Behavior, len(p.Behaviors))
 	for _, behavior := range p.Behaviors {
 		behavior.Arguments = append([]string(nil), behavior.Arguments...)
+		behavior.Evidence = normalizeEvidenceRefs(behavior.Evidence)
 		key := BehaviorKey(behavior)
 		if existing, ok := counts[key]; ok {
 			existing.Count += max(behavior.Count, 1)
+			existing.Evidence = normalizeEvidenceRefs(append(existing.Evidence, behavior.Evidence...))
 			counts[key] = existing
 			continue
 		}
@@ -169,7 +195,7 @@ func (p *Profile) Normalize() {
 	}
 	p.Behaviors = p.Behaviors[:0]
 	for _, behavior := range counts {
-		behavior.Evidence = StableEvidence(behavior)
+		behavior.ID = StableBehaviorID(behavior)
 		p.Behaviors = append(p.Behaviors, behavior)
 	}
 	sort.Slice(p.Behaviors, func(i, j int) bool {
@@ -179,9 +205,62 @@ func (p *Profile) Normalize() {
 	sort.Strings(p.Capture.Coverage.Limitations)
 }
 
-func StableEvidence(behavior Behavior) string {
+func StableBehaviorID(behavior Behavior) string {
 	sum := sha256.Sum256([]byte(BehaviorKey(behavior)))
 	return "event:sha256:" + hex.EncodeToString(sum[:])
+}
+
+func NewEvidenceRef(line int, rawLine []byte) EvidenceRef {
+	rawLine = bytes.TrimSuffix(rawLine, []byte("\n"))
+	sum := sha256.Sum256(rawLine)
+	return EvidenceRef{Line: line, LineSHA256: "sha256:" + hex.EncodeToString(sum[:])}
+}
+
+func AttachEvidence(profile *Profile, raw []byte, retention, envelope string) {
+	artifact := NewEvidenceArtifact(raw, retention, envelope)
+	profile.Capture.EvidenceArtifact = &artifact
+	for index := range profile.Behaviors {
+		for refIndex := range profile.Behaviors[index].Evidence {
+			profile.Behaviors[index].Evidence[refIndex].ArtifactSHA256 = artifact.SHA256
+		}
+	}
+}
+
+func NewEvidenceArtifact(raw []byte, retention, envelope string) EvidenceArtifact {
+	sum := sha256.Sum256(raw)
+	return EvidenceArtifact{
+		SHA256:    "sha256:" + hex.EncodeToString(sum[:]),
+		ByteSize:  int64(len(raw)),
+		MediaType: EvidenceMediaType,
+		Format:    EvidenceFormat,
+		Retention: retention,
+		Envelope:  envelope,
+	}
+}
+
+func normalizeEvidenceRefs(refs []EvidenceRef) []EvidenceRef {
+	unique := make(map[string]EvidenceRef, len(refs))
+	for _, ref := range refs {
+		key := fmt.Sprintf("%s\x1e%d\x1e%s", ref.ArtifactSHA256, ref.Line, ref.LineSHA256)
+		unique[key] = ref
+	}
+	refs = make([]EvidenceRef, 0, len(unique))
+	for _, ref := range unique {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].ArtifactSHA256 != refs[j].ArtifactSHA256 {
+			return refs[i].ArtifactSHA256 < refs[j].ArtifactSHA256
+		}
+		if refs[i].Line != refs[j].Line {
+			return refs[i].Line < refs[j].Line
+		}
+		return refs[i].LineSHA256 < refs[j].LineSHA256
+	})
+	if len(refs) > maxEvidenceRefs {
+		refs = refs[:maxEvidenceRefs]
+	}
+	return refs
 }
 
 func BehaviorKey(b Behavior) string {
@@ -213,9 +292,10 @@ func (p Profile) StableDigest() (string, error) {
 	}{p.SchemaVersion, p.Kind, p.Tool, p.Subject, p.Capture, p.Result, p.Behaviors}
 	canonical.Behaviors = append([]Behavior(nil), canonical.Behaviors...)
 	canonical.Capture.DurationMillis = 0
-	canonical.Capture.RawTraceSHA256 = ""
+	canonical.Capture.EvidenceArtifact = nil
 	for index := range canonical.Behaviors {
 		canonical.Behaviors[index].Count = 1
+		canonical.Behaviors[index].Evidence = nil
 	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
@@ -283,6 +363,11 @@ func ValidateProfile(p Profile) error {
 	if err := validateCoverage(p.Capture.Coverage); err != nil {
 		return err
 	}
+	if p.Capture.EvidenceArtifact != nil {
+		if err := validateEvidenceArtifact(*p.Capture.EvidenceArtifact); err != nil {
+			return err
+		}
+	}
 	switch p.Capture.TraceIntegrity {
 	case "isolated-root-tracer":
 		if p.Capture.NetworkMode != "none" || p.Capture.SandboxProfile != "behaviorlock-linux-npm-v1" {
@@ -307,6 +392,9 @@ func ValidateProfile(p Profile) error {
 			if p.Subject.RegistryIntegrity == "" || p.Subject.DependencyLockSHA256 == "" {
 				return errors.New("captured profile is missing acquisition provenance")
 			}
+			if p.Capture.EvidenceArtifact == nil || p.Capture.EvidenceArtifact.Retention != "retained" || p.Capture.EvidenceArtifact.Envelope != "behaviorlock-trace-v1-payload" {
+				return errors.New("captured profile is missing retained raw evidence metadata")
+			}
 		}
 		if p.Capture.Coverage.Scope != "registry-install-lifecycle" || p.Capture.Coverage.Completeness != "partial" || !sameStrings(p.Capture.Coverage.Lifecycle, []string{"install", "postinstall", "preinstall"}) {
 			return errors.New("captured profile coverage is inconsistent")
@@ -315,11 +403,11 @@ func ValidateProfile(p Profile) error {
 		if p.Capture.NetworkMode != "unknown" || p.Capture.SandboxProfile != "external-unverified" || p.Capture.Coverage.Scope != "external-strace" || p.Capture.Coverage.Completeness != "unverified" || len(p.Capture.Coverage.Lifecycle) != 0 {
 			return errors.New("external profile must not attest sandbox conditions")
 		}
+		if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && (p.Capture.EvidenceArtifact == nil || p.Capture.EvidenceArtifact.Retention != "external-unverified" || p.Capture.EvidenceArtifact.Envelope != "external-strace") {
+			return errors.New("external profile is missing retained unverified evidence metadata")
+		}
 	default:
 		return fmt.Errorf("unsupported trace integrity %q", p.Capture.TraceIntegrity)
-	}
-	if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && !validDigest(p.Capture.RawTraceSHA256) {
-		return errors.New("completed profile is missing a valid raw trace digest")
 	}
 	if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && len(p.Behaviors) == 0 {
 		return errors.New("completed profile contains no recognized behavior")
@@ -328,7 +416,7 @@ func ValidateProfile(p Profile) error {
 		return fmt.Errorf("profile exceeds %d behaviors", maxProfileBehaviors)
 	}
 	for index, behavior := range p.Behaviors {
-		if err := validateBehavior(behavior); err != nil {
+		if err := validateBehavior(behavior, p.Capture.EvidenceArtifact); err != nil {
 			return fmt.Errorf("behavior %d: %w", index, err)
 		}
 	}
@@ -349,6 +437,15 @@ func ReadProfile(path string) (Profile, error) {
 	}
 	if len(raw) > maxProfileBytes {
 		return Profile{}, fmt.Errorf("profile exceeds %d bytes", maxProfileBytes)
+	}
+	var header struct {
+		SchemaVersion string `json:"schemaVersion"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return Profile{}, fmt.Errorf("decode profile header: %w", err)
+	}
+	if header.SchemaVersion != ProfileSchemaVersion {
+		return Profile{}, fmt.Errorf("profile schema %q is not comparable with current schema %s; regenerate the profile", header.SchemaVersion, ProfileSchemaVersion)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -373,7 +470,7 @@ func ReadProfile(path string) (Profile, error) {
 	return profile, nil
 }
 
-func validateBehavior(behavior Behavior) error {
+func validateBehavior(behavior Behavior, artifact *EvidenceArtifact) error {
 	allowedTypes := map[string]bool{
 		"filesystem.read": true, "filesystem.write": true, "filesystem.create": true,
 		"filesystem.delete": true, "filesystem.rename": true, "filesystem.permission": true,
@@ -398,11 +495,62 @@ func validateBehavior(behavior Behavior) error {
 	default:
 		return errors.New("outcome is invalid")
 	}
-	if len(behavior.Evidence) != len("event:sha256:")+64 || !strings.HasPrefix(behavior.Evidence, "event:sha256:") {
-		return errors.New("stable evidence identifier is invalid")
+	if behavior.ID != StableBehaviorID(behavior) {
+		return errors.New("stable behavior identifier is invalid")
 	}
-	if _, err := hex.DecodeString(strings.TrimPrefix(behavior.Evidence, "event:sha256:")); err != nil {
-		return errors.New("stable evidence identifier is invalid")
+	if len(behavior.Evidence) == 0 || len(behavior.Evidence) > maxEvidenceRefs {
+		return errors.New("evidence reference count is invalid")
+	}
+	for _, ref := range behavior.Evidence {
+		if artifact == nil || ref.ArtifactSHA256 != artifact.SHA256 || !validDigest(ref.ArtifactSHA256) ||
+			ref.Line < 1 || !validDigest(ref.LineSHA256) {
+			return errors.New("evidence reference is invalid")
+		}
+	}
+	return nil
+}
+
+func validateEvidenceArtifact(artifact EvidenceArtifact) error {
+	if !validDigest(artifact.SHA256) || artifact.ByteSize < 1 || artifact.ByteSize > maxEvidenceBytes ||
+		artifact.MediaType != EvidenceMediaType || artifact.Format != EvidenceFormat {
+		return errors.New("raw evidence artifact metadata is invalid")
+	}
+	switch artifact.Retention {
+	case "retained", "external-unverified":
+	default:
+		return errors.New("raw evidence retention is invalid")
+	}
+	switch artifact.Envelope {
+	case "behaviorlock-trace-v1-payload", "external-strace":
+	default:
+		return errors.New("raw evidence envelope is invalid")
+	}
+	return nil
+}
+
+func VerifyEvidence(profile Profile, raw []byte) error {
+	if len(raw) == 0 || len(raw) > maxEvidenceBytes {
+		return fmt.Errorf("raw evidence must contain 1 through %d bytes", maxEvidenceBytes)
+	}
+	if profile.Capture.EvidenceArtifact == nil {
+		return errors.New("profile does not declare a raw evidence artifact")
+	}
+	artifact := NewEvidenceArtifact(raw, profile.Capture.EvidenceArtifact.Retention, profile.Capture.EvidenceArtifact.Envelope)
+	if artifact.SHA256 != profile.Capture.EvidenceArtifact.SHA256 || artifact.ByteSize != profile.Capture.EvidenceArtifact.ByteSize ||
+		artifact.MediaType != profile.Capture.EvidenceArtifact.MediaType || artifact.Format != profile.Capture.EvidenceArtifact.Format {
+		return errors.New("raw evidence artifact digest or metadata does not match the profile")
+	}
+	lines := bytes.Split(raw, []byte("\n"))
+	for behaviorIndex, behavior := range profile.Behaviors {
+		for refIndex, ref := range behavior.Evidence {
+			if ref.Line > len(lines) || ref.ArtifactSHA256 != artifact.SHA256 {
+				return fmt.Errorf("behavior %d evidence reference %d is outside the artifact", behaviorIndex, refIndex)
+			}
+			sum := sha256.Sum256(lines[ref.Line-1])
+			if "sha256:"+hex.EncodeToString(sum[:]) != ref.LineSHA256 {
+				return fmt.Errorf("behavior %d evidence reference %d line digest does not match", behaviorIndex, refIndex)
+			}
+		}
 	}
 	return nil
 }
@@ -473,25 +621,69 @@ func sameStrings(left, right []string) bool {
 }
 
 func WriteJSON(path string, value any) error {
-	var writer io.Writer = os.Stdout
-	var file *os.File
-	if path != "" && path != "-" {
-		var err error
-		// #nosec G304 -- writing a caller-selected output path with mode 0600 is the explicit local CLI contract.
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		writer = file
+	var encoded bytes.Buffer
+	if err := EncodeJSON(&encoded, value); err != nil {
+		return err
 	}
+	if path == "" || path == "-" {
+		_, err := os.Stdout.Write(encoded.Bytes())
+		return err
+	}
+	return atomicWrite(path, encoded.Bytes())
+}
+
+func EncodeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(true)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
 }
 
-func SeverityRank(value string) int {
+func WriteEvidence(path string, raw []byte) error {
+	if path == "" || path == "-" {
+		return errors.New("raw evidence output must be a file path")
+	}
+	if len(raw) == 0 || len(raw) > maxEvidenceBytes {
+		return fmt.Errorf("raw evidence must contain 1 through %d bytes", maxEvidenceBytes)
+	}
+	return atomicWrite(path, raw)
+}
+
+func atomicWrite(path string, content []byte) (err error) {
+	directory := filepath.Dir(path)
+	base := filepath.Base(path)
+	// #nosec G304 -- creating a temporary file beside a caller-selected output is the explicit local CLI contract.
+	temporary, err := os.CreateTemp(directory, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if temporaryPath != "" {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	temporaryPath = ""
+	return nil
+}
+
+func ReviewLevelRank(value string) int {
 	switch value {
 	case "critical":
 		return 4
