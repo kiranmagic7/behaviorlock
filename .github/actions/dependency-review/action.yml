@@ -1,0 +1,135 @@
+name: BehaviorLock dependency review capture
+description: Capture an exact npm dependency version pair without executing pull-request repository code.
+
+inputs:
+  github-token:
+    description: Read-only token used only for GitHub API manifest reads.
+    required: true
+  event-path:
+    description: Trusted GitHub pull_request event JSON path.
+    required: true
+  output-directory:
+    description: Empty trusted-runner directory for profiles, evidence, and the JSON diff.
+    required: true
+  review-threshold:
+    description: Review level used for the threshold-reached output.
+    required: false
+    default: high
+
+outputs:
+  threshold-reached:
+    description: Whether the configured review threshold was reached.
+    value: ${{ steps.bundle.outputs.threshold-reached }}
+  highest-review-level:
+    description: Highest review level among added observations.
+    value: ${{ steps.bundle.outputs.highest-review-level }}
+  added-count:
+    description: Number of added normalized observations.
+    value: ${{ steps.bundle.outputs.added-count }}
+  skipped:
+    description: Whether no supported exact version pair was available.
+    value: ${{ steps.bundle.outputs.skipped }}
+  baseline-profile-path:
+    description: Baseline profile path, empty when skipped.
+    value: ${{ steps.bundle.outputs.baseline-profile-path }}
+  baseline-evidence-path:
+    description: Baseline raw evidence path, empty when skipped.
+    value: ${{ steps.bundle.outputs.baseline-evidence-path }}
+  candidate-profile-path:
+    description: Candidate profile path, empty when skipped.
+    value: ${{ steps.bundle.outputs.candidate-profile-path }}
+  candidate-evidence-path:
+    description: Candidate raw evidence path, empty when skipped.
+    value: ${{ steps.bundle.outputs.candidate-evidence-path }}
+  diff-path:
+    description: JSON diff path, empty when skipped.
+    value: ${{ steps.bundle.outputs.diff-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build trusted base tools
+      shell: bash
+      env:
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+      run: |
+        set -euo pipefail
+        install -d -m 0700 "$OUTPUT_DIRECTORY"
+        go build -trimpath -o "$RUNNER_TEMP/behaviorlock-review-ci" ./cmd/review-ci
+        go build -trimpath -o "$RUNNER_TEMP/behaviorlock" ./cmd/behaviorlock
+
+    - name: Extract exact package pair through the GitHub API
+      id: extract
+      shell: bash
+      env:
+        EVENT_PATH: ${{ inputs.event-path }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/behaviorlock-review-ci" extract \
+          --event "$EVENT_PATH" \
+          --output "$OUTPUT_DIRECTORY/plan.json" \
+          --github-output "$GITHUB_OUTPUT"
+
+    - name: Build immutable local runner input
+      if: steps.extract.outputs.skipped != 'true'
+      shell: bash
+      run: docker build --pull=false --tag behaviorlock-runner:dev runner
+
+    - name: Capture baseline registry package
+      if: steps.extract.outputs.skipped != 'true'
+      shell: bash
+      env:
+        PACKAGE_SPEC: ${{ steps.extract.outputs.baseline-package }}
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/behaviorlock" capture \
+          --experimental \
+          --phase lifecycle \
+          --package "$PACKAGE_SPEC" \
+          --timeout 3m \
+          --output "$OUTPUT_DIRECTORY/baseline.profile.json"
+
+    - name: Capture candidate registry package
+      if: steps.extract.outputs.skipped != 'true'
+      shell: bash
+      env:
+        PACKAGE_SPEC: ${{ steps.extract.outputs.candidate-package }}
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/behaviorlock" capture \
+          --experimental \
+          --phase lifecycle \
+          --package "$PACKAGE_SPEC" \
+          --timeout 3m \
+          --output "$OUTPUT_DIRECTORY/candidate.profile.json"
+
+    - name: Produce data-only behavior diff
+      if: steps.extract.outputs.skipped != 'true'
+      shell: bash
+      env:
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/behaviorlock" compare \
+          --baseline "$OUTPUT_DIRECTORY/baseline.profile.json" \
+          --candidate "$OUTPUT_DIRECTORY/candidate.profile.json" \
+          --format json \
+          --fail-on none \
+          --output "$OUTPUT_DIRECTORY/report.json"
+
+    - name: Bind files to the workflow run
+      id: bundle
+      shell: bash
+      env:
+        OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+        REVIEW_THRESHOLD: ${{ inputs.review-threshold }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/behaviorlock-review-ci" bundle \
+          --directory "$OUTPUT_DIRECTORY" \
+          --threshold "$REVIEW_THRESHOLD" \
+          --github-output "$GITHUB_OUTPUT"
