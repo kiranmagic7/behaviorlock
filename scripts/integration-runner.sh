@@ -78,11 +78,16 @@ require_trace_match() {
 
 require_profile_type() {
   behavior_type="$1"
+  syscall_pattern="${2:-}"
   if jq -e --arg behavior_type "$behavior_type" '.behaviors | any(.type == $behavior_type)' "$profile" >/dev/null; then
     return
   fi
   echo "fixture profile check failed: missing $behavior_type" >&2
   jq -r '.behaviors[].type' "$profile" | sort -u >&2
+  if [ -n "$syscall_pattern" ]; then
+    echo "matching raw syscall lines:" >&2
+    grep -E -- "$syscall_pattern" "$profile_evidence" | sed -n '1,20p' >&2 || true
+  fi
   exit 1
 }
 
@@ -130,7 +135,7 @@ grep -q '"target": "$HOME/.ssh/id_rsa"' "$profile"
 grep -q '"sensitive": true' "$profile"
 grep -q '"target": "/bin/sh"' "$profile"
 require_profile_type 'network.dns'
-require_profile_type 'network.listen'
+require_profile_type 'network.listen' 'listen\('
 require_profile_type 'network.accept'
 require_profile_type 'filesystem.descriptor_write'
 require_profile_type 'filesystem.enumerate'
