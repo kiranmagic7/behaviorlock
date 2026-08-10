@@ -21,6 +21,35 @@ type sinkholeAudit struct {
 	CanaryIDs []string `json:"canaryIds"`
 }
 
+func buildSinkholeResolverArgs(volumeName, runnerImageID string) []string {
+	return []string{
+		"run", "--rm",
+		"--network", "none",
+		"--read-only",
+		"--user", "0:0",
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges:true",
+		"--pids-limit", "16",
+		"--memory", "32m",
+		"--memory-swap", "32m",
+		"--cpus", "0.25",
+		"--mount", "type=volume,source=" + volumeName + ",target=/resolver,volume-nocopy",
+		runnerImageID, "resolver",
+	}
+}
+
+func (runner *DockerRunner) prepareSinkholeResolver(ctx context.Context, volumeName, runnerImageID string) error {
+	created, err := runner.run(ctx, []string{"volume", "create", volumeName}, 64<<10, 64<<10)
+	if err != nil || created.ExitCode != 0 || strings.TrimSpace(string(created.Stdout)) != volumeName {
+		return fmt.Errorf("create sinkhole resolver volume: %s", safeDiagnostic(created.Stderr))
+	}
+	initialized, err := runner.run(ctx, buildSinkholeResolverArgs(volumeName, runnerImageID), 64<<10, 64<<10)
+	if err != nil || initialized.ExitCode != 0 || initialized.Truncated {
+		return fmt.Errorf("initialize sinkhole resolver volume: %s", safeDiagnostic(initialized.Stderr))
+	}
+	return nil
+}
+
 func encodeSinkholeCanaries(canaries []canarySpec) (string, error) {
 	entries := make([]struct {
 		ID    string `json:"id"`
@@ -50,10 +79,8 @@ func buildSinkholeArgs(containerName, runnerImageID string, canaries []canarySpe
 		"--network", "none",
 		"--sysctl", "net.ipv4.ip_unprivileged_port_start=0",
 		"--read-only",
-		"--user", "0:0",
+		"--user", "65532:65532",
 		"--cap-drop", "ALL",
-		"--cap-add", "SETUID",
-		"--cap-add", "SETGID",
 		"--security-opt", "no-new-privileges:true",
 		"--pids-limit", "64",
 		"--memory", "128m",

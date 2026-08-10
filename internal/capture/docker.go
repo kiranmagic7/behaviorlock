@@ -183,13 +183,14 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	traceContainer := "behaviorlock-trace-" + runID
 	proxyContainer := "behaviorlock-proxy-" + runID
 	sinkholeContainer := "behaviorlock-sinkhole-" + runID
+	sinkholeResolverVolume := "behaviorlock-sinkhole-resolver-" + runID
 	temporaryImage := "behaviorlock-analysis:" + runID
 	egressNetwork := "behaviorlock-acq-egress-" + runID
 	proxyVolume := "behaviorlock-acq-socket-" + runID
 	defer runner.cleanup(cleanupTargets{
 		containers: []string{prepContainer, traceContainer, proxyContainer, sinkholeContainer},
 		images:     []string{temporaryImage},
-		volumes:    []string{proxyVolume},
+		volumes:    []string{proxyVolume, sinkholeResolverVolume},
 		networks:   []string{egressNetwork},
 	})
 
@@ -261,6 +262,9 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	}
 	traceNetwork := "none"
 	if config.Sinkhole {
+		if err := runner.prepareSinkholeResolver(captureContext, sinkholeResolverVolume, runnerImageID); err != nil {
+			return withoutEvidence(timedOutProfile(profile, captureContext, err))
+		}
 		if err := runner.startSinkhole(captureContext, sinkholeContainer, runnerImageID, canaries); err != nil {
 			return withoutEvidence(timedOutProfile(profile, captureContext, err))
 		}
@@ -270,7 +274,7 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	}
 
 	started := time.Now()
-	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String(), profile.Capture.Phase, traceNetwork, canaries), maxTraceStream, 1<<20)
+	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String(), profile.Capture.Phase, traceNetwork, sinkholeResolverVolume, canaries), maxTraceStream, 1<<20)
 	duration := time.Since(started)
 	profile.Capture.DurationMillis = duration.Milliseconds()
 
@@ -420,9 +424,11 @@ func buildProxyArgs(containerName, networkName, proxyVolume, runnerImageID strin
 	return append(arguments, runnerImageID, "proxy")
 }
 
-func buildTraceArgs(containerName, image, packageSpec, phase, networkMode string, canaries []canarySpec) []string {
-	if networkMode != "none" && !strings.HasPrefix(networkMode, "container:behaviorlock-sinkhole-") {
+func buildTraceArgs(containerName, image, packageSpec, phase, networkMode, resolverVolume string, canaries []canarySpec) []string {
+	sinkholeEnabled := validSinkholeNamespace(networkMode, resolverVolume)
+	if networkMode != "none" && !sinkholeEnabled {
 		networkMode = "none"
+		resolverVolume = ""
 	}
 	arguments := []string{
 		"run", "--name", containerName,
@@ -455,14 +461,32 @@ func buildTraceArgs(containerName, image, packageSpec, phase, networkMode string
 		"--env", "npm_config_fund=false",
 		"--env", "npm_config_update_notifier=false",
 	}
-	arguments = appendScrubbedProxyEnvironment(arguments)
-	sinkholeEnabled := "0"
-	if strings.HasPrefix(networkMode, "container:behaviorlock-sinkhole-") {
-		sinkholeEnabled = "1"
+	if sinkholeEnabled {
+		arguments = append(arguments, "--mount", "type=volume,source="+resolverVolume+",target=/etc/resolv.conf,readonly,volume-nocopy,volume-subpath=resolv.conf")
 	}
-	arguments = append(arguments, "--env", "BEHAVIORLOCK_SINKHOLE_ENABLED="+sinkholeEnabled)
+	arguments = appendScrubbedProxyEnvironment(arguments)
+	sinkholeSelection := "0"
+	if sinkholeEnabled {
+		sinkholeSelection = "1"
+	}
+	arguments = append(arguments, "--env", "BEHAVIORLOCK_SINKHOLE_ENABLED="+sinkholeSelection)
 	arguments = appendCanaryEnvironment(arguments, canaries)
 	return append(arguments, image, "trace", packageSpec, phase)
+}
+
+func validSinkholeNamespace(networkMode, resolverVolume string) bool {
+	const networkPrefix = "container:behaviorlock-sinkhole-"
+	if !strings.HasPrefix(networkMode, networkPrefix) {
+		return false
+	}
+	runID := strings.TrimPrefix(networkMode, networkPrefix)
+	if len(runID) != 24 {
+		return false
+	}
+	if _, err := hex.DecodeString(runID); err != nil {
+		return false
+	}
+	return resolverVolume == "behaviorlock-sinkhole-resolver-"+runID
 }
 
 func appendScrubbedProxyEnvironment(arguments []string) []string {

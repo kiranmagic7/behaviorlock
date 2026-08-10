@@ -26,7 +26,7 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 	t.Parallel()
 	packageSpec := "safe-package@1.2.3"
 	canaries := deterministicCanaries(t)
-	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, packageSpec, "lifecycle", "none", canaries)
+	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, packageSpec, "lifecycle", "none", "", canaries)
 	if arguments[len(arguments)-1] != "lifecycle" || arguments[len(arguments)-2] != packageSpec || arguments[len(arguments)-3] != "trace" {
 		t.Fatalf("unexpected trailing arguments: %q", arguments[len(arguments)-4:])
 	}
@@ -53,15 +53,22 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 func TestTraceArgumentsEnableOnlyGeneratedSinkholeNamespace(t *testing.T) {
 	t.Parallel()
 	canaries := deterministicCanaries(t)
-	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:behaviorlock-sinkhole-abc", canaries)
+	runID := strings.Repeat("a", 24)
+	resolverVolume := "behaviorlock-sinkhole-resolver-" + runID
+	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:behaviorlock-sinkhole-"+runID, resolverVolume, canaries)
 	joined := strings.Join(arguments, " ")
-	if !strings.Contains(joined, "--network container:behaviorlock-sinkhole-abc") || !strings.Contains(joined, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=1") {
+	if !strings.Contains(joined, "--network container:behaviorlock-sinkhole-"+runID) || !strings.Contains(joined, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=1") ||
+		!strings.Contains(joined, "source="+resolverVolume+",target=/etc/resolv.conf,readonly,volume-nocopy,volume-subpath=resolv.conf") {
 		t.Fatalf("sinkhole namespace was not enabled explicitly: %q", arguments)
 	}
 
-	invalid := strings.Join(buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:attacker", canaries), " ")
+	invalid := strings.Join(buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:attacker", resolverVolume, canaries), " ")
 	if !strings.Contains(invalid, "--network none") || !strings.Contains(invalid, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=0") {
 		t.Fatalf("untrusted network namespace was not rejected: %q", invalid)
+	}
+	mismatched := strings.Join(buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:behaviorlock-sinkhole-"+runID, "behaviorlock-sinkhole-resolver-"+strings.Repeat("b", 24), canaries), " ")
+	if !strings.Contains(mismatched, "--network none") || strings.Contains(mismatched, "target=/etc/resolv.conf") {
+		t.Fatalf("mismatched resolver volume was accepted: %q", mismatched)
 	}
 }
 

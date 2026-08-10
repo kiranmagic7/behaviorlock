@@ -171,30 +171,27 @@ options timeout:1 attempts:1'
       node /opt/behaviorlock/proxy.mjs
     ;;
   sinkhole)
-    if [ "$(id -u)" -ne 0 ]; then
-      echo "sinkhole supervisor must start as uid 0" >&2
+    if [ "$(id -u)" -ne 65532 ]; then
+      echo "sinkhole must run as uid 65532" >&2
       exit 70
     fi
-    printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /etc/resolv.conf || {
-      echo "sinkhole resolver configuration failed" >&2
-      exit 74
-    }
-    exec setpriv \
-      --reuid=65532 \
-      --regid=65532 \
-      --clear-groups \
-      --inh-caps=-all \
-      --ambient-caps=-all \
-      --bounding-set=-all \
-      --no-new-privs \
-      node /opt/behaviorlock/sinkhole.mjs
+    exec node /opt/behaviorlock/sinkhole.mjs
+    ;;
+  resolver)
+    if [ "$(id -u)" -ne 0 ] || [ ! -d /resolver ]; then
+      echo "resolver initializer requires uid 0 and its private volume" >&2
+      exit 70
+    fi
+    umask 077
+    printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /resolver/resolv.conf
+    chmod 0444 /resolver/resolv.conf
     ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \
       "$(node --version)" "$(npm --version)" "$(strace --version | sed -n '1s/^strace -- version //p')"
     ;;
   *)
-    echo "usage: entrypoint.sh prepare|trace|proxy|sinkhole|version package@version [lifecycle|import]" >&2
+    echo "usage: entrypoint.sh prepare|trace|proxy|sinkhole|resolver|version package@version [lifecycle|import]" >&2
     exit 64
     ;;
 esac

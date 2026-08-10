@@ -8,6 +8,7 @@ probe_volume=""
 tracer_death_container=""
 resource_container=""
 sinkhole_container=""
+sinkhole_resolver_volume=""
 cleanup_integration() {
   if [ -n "$probe_proxy" ]; then
     docker rm --force "$probe_proxy" >/dev/null 2>&1 || true
@@ -23,6 +24,9 @@ cleanup_integration() {
       docker rm --force "$test_container" >/dev/null 2>&1 || true
     fi
   done
+  if [ -n "$sinkhole_resolver_volume" ]; then
+    docker volume rm --force "$sinkhole_resolver_volume" >/dev/null 2>&1 || true
+  fi
   rm -rf "$temp_dir"
 }
 trap cleanup_integration EXIT
@@ -46,6 +50,13 @@ run_trace_container() {
     set -- --name "$container_name"
   else
     set -- --rm
+  fi
+  if [ "$sinkhole_enabled" -eq 1 ]; then
+    if [ -z "$sinkhole_resolver_volume" ]; then
+      echo "sinkhole trace is missing its resolver volume" >&2
+      return 1
+    fi
+    set -- "$@" --mount "type=volume,source=$sinkhole_resolver_volume,target=/etc/resolv.conf,readonly,volume-nocopy,volume-subpath=resolv.conf"
   fi
   docker run "$@" \
     --network "$network_mode" \
@@ -207,6 +218,10 @@ assert_no_capture_resources() {
   fi
   if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-socket-'; then
     echo "capture left an acquisition socket volume behind" >&2
+    exit 1
+  fi
+  if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-sinkhole-resolver-'; then
+    echo "capture left a sinkhole resolver volume behind" >&2
     exit 1
   fi
   if docker network ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-egress-'; then
@@ -493,15 +508,27 @@ if grep -q '/work/behaviorlock-sinkhole-stage' "$offline_sinkhole_output"; then
 fi
 
 sinkhole_container="behaviorlock-sinkhole-fixture-$network_suffix"
+sinkhole_resolver_volume="behaviorlock-sinkhole-resolver-fixture-$network_suffix"
+docker volume create "$sinkhole_resolver_volume" >/dev/null
+docker run --rm \
+  --network none \
+  --read-only \
+  --user 0:0 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 16 \
+  --memory 32m \
+  --memory-swap 32m \
+  --cpus 0.25 \
+  --mount "type=volume,source=$sinkhole_resolver_volume,target=/resolver,volume-nocopy" \
+  behaviorlock-runner:dev resolver
 docker run --detach \
   --name "$sinkhole_container" \
   --network none \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
   --read-only \
-  --user 0:0 \
+  --user 65532:65532 \
   --cap-drop ALL \
-  --cap-add SETUID \
-  --cap-add SETGID \
   --security-opt no-new-privileges:true \
   --pids-limit 64 \
   --memory 128m \
@@ -564,6 +591,8 @@ if grep -q 'behaviorlock-canary.invalid/' "$sinkhole_logs"; then
 fi
 docker rm --force "$sinkhole_container" >/dev/null
 sinkhole_container=""
+docker volume rm --force "$sinkhole_resolver_volume" >/dev/null
+sinkhole_resolver_volume=""
 
 docker build --pull=false --tag behaviorlock-tracer-failure:dev testdata/tracer-failure
 failure_output="$temp_dir/tracer-failure.out"

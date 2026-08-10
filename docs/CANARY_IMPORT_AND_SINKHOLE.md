@@ -24,7 +24,7 @@ Importing a package can trigger behavior that installation does not. It can also
 
 ## Inert sinkhole
 
-`--sinkhole` starts a trusted supervisor with only `SETUID` and `SETGID`, writes the loopback resolver configuration into its Docker-managed resolver mount, and then irreversibly drops to uid `65532` with zero effective and bounding capabilities before opening a listener. A namespaced `net.ipv4.ip_unprivileged_port_start=0` setting lets that unprivileged process bind the fixed loopback DNS, HTTP, and TCP ports without retaining `NET_BIND_SERVICE`. The trace container joins only that responder's Docker network mode `none` namespace and verifies that it inherited the exact resolver configuration, so both containers share loopback but have no external, bridge, host-gateway, private-network, or metadata route.
+`--sinkhole` first uses a trusted, no-network, zero-capability initializer to write two fixed lines into a private Docker resolver volume. The trace mounts only that single file read-only and verifies its exact content before package code runs; no host path is mounted. The responder itself starts directly as uid `65532` with zero effective capabilities and Docker network mode `none`. A namespaced `net.ipv4.ip_unprivileged_port_start=0` setting lets it bind the fixed loopback DNS, HTTP, and TCP ports without retaining `NET_BIND_SERVICE`. The trace joins only that responder's network namespace, so both containers share loopback but have no external, bridge, host-gateway, private-network, or metadata route.
 
 The responder provides bounded synthetic services on loopback:
 
