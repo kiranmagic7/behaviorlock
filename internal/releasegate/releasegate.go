@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const maxInputBytes = 1 << 20
+
 type Config struct {
 	SchemaVersion int             `json:"schemaVersion"`
 	MaxAgeHours   int             `json:"maxAgeHours"`
@@ -207,11 +209,29 @@ func freshReason(id string, completedAt, now time.Time, maxAge time.Duration) st
 }
 
 func decodeStrict(path string, target any) error {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("input must be a regular non-symlink file")
+	}
+	if pathInfo.Size() > maxInputBytes {
+		return fmt.Errorf("input exceeds %d bytes", maxInputBytes)
+	}
+	// #nosec G304 -- path is explicit CLI input; Lstat, SameFile, mode, and size checks reject links and replacement races.
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxInputBytes || !os.SameFile(pathInfo, openedInfo) {
+		return errors.New("input changed or became unsafe while opening")
+	}
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

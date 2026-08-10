@@ -2,6 +2,8 @@ package releasegate
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +120,30 @@ func TestAssessListsUnexpectedAndDuplicateEvidenceAsIssues(t *testing.T) {
 	}
 	if report.AllGatesSatisfied || len(report.Issues) != 2 {
 		t.Fatalf("malformed evidence issues were not retained: %#v", report.Issues)
+	}
+}
+
+func TestDecodeStrictRejectsSymlinksAndOversizedInputs(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target.json")
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "linked.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var decoded map[string]any
+	if err := decodeStrict(link, &decoded); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("symlink input was not rejected: %v", err)
+	}
+
+	oversized := filepath.Join(directory, "oversized.json")
+	if err := os.WriteFile(oversized, make([]byte, maxInputBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeStrict(oversized, &decoded); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized input was not rejected: %v", err)
 	}
 }
