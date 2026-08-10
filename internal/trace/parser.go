@@ -22,16 +22,17 @@ const (
 )
 
 var (
-	quotedPattern   = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
-	pidPattern      = regexp.MustCompile(`^\[pid\s+[0-9]+\]\s+`)
-	plainPIDPattern = regexp.MustCompile(`^[0-9]+\s+`)
-	procPIDPattern  = regexp.MustCompile(`/proc/[0-9]+(?:/|$)`)
-	tmpPattern      = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
-	portPattern     = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
-	ipv4Pattern     = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
-	ipv6Pattern     = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
-	familyPattern   = regexp.MustCompile(`sa_family=(AF_[A-Z0-9_]+)`)
-	resultSeparator = regexp.MustCompile(`\)[ \t]+=[ \t]+`)
+	quotedPattern    = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+	pidPattern       = regexp.MustCompile(`^\[pid\s+[0-9]+\]\s+`)
+	plainPIDPattern  = regexp.MustCompile(`^[0-9]+\s+`)
+	procPIDPattern   = regexp.MustCompile(`/proc/[0-9]+(?:/|$)`)
+	tmpPattern       = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
+	nodeCachePattern = regexp.MustCompile(`/tmp/node-compile-cache/([^/\s",)]+)/([0-9a-f]{8})\.[0-9A-Za-z]{6}`)
+	portPattern      = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
+	ipv4Pattern      = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
+	ipv6Pattern      = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
+	familyPattern    = regexp.MustCompile(`sa_family=(AF_[A-Z0-9_]+)`)
+	resultSeparator  = regexp.MustCompile(`\)[ \t]+=[ \t]+`)
 )
 
 type Stats struct {
@@ -201,6 +202,7 @@ func normalizePath(value string) string {
 		}
 		return "/proc/$PID"
 	})
+	value = nodeCachePattern.ReplaceAllString(value, `/tmp/node-compile-cache/${1}/${2}.$$RANDOM`)
 	value = tmpPattern.ReplaceAllString(value, "$TMP")
 	value = filepath.Clean(value)
 	if strings.HasPrefix(value, "../") || value == ".." {

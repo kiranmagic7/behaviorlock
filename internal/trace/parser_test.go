@@ -354,6 +354,20 @@ func TestNormalizePathReplacesOnlyProcPIDBoundaries(t *testing.T) {
 	}
 }
 
+func TestNormalizePathReplacesNodeCompileCacheNonceOnly(t *testing.T) {
+	t.Parallel()
+	first := normalizePath("/tmp/node-compile-cache/v22.23.2-x64-9ac5647c-65532/00bf0630.UxGNV0")
+	second := normalizePath("/tmp/node-compile-cache/v22.23.2-x64-9ac5647c-65532/00bf0630.0ZWDib")
+	want := "/tmp/node-compile-cache/v22.23.2-x64-9ac5647c-65532/00bf0630.$RANDOM"
+	if first != want || second != want {
+		t.Fatalf("compile-cache nonce was not normalized: first=%q second=%q", first, second)
+	}
+	lookalike := "/tmp/node-compile-cache/v22.23.2-x64-9ac5647c-65532/not-a-cache-file.UxGNV0"
+	if got := normalizePath(lookalike); got != lookalike {
+		t.Fatalf("lookalike cache path was rewritten: %q", got)
+	}
+}
+
 func TestParseObservesEnvironmentFingerprintPaths(t *testing.T) {
 	t.Parallel()
 	input := strings.Join([]string{
