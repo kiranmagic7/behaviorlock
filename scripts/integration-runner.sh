@@ -94,7 +94,7 @@ run_resource_trace_container() {
     # Keep a container-wide reserve for the root-owned tracer and supervisor.
     # The untrusted package runs as uid 65532 and reaches its lower RLIMIT_NPROC
     # without starving trusted capture infrastructure of PID slots.
-    process) pids_limit=64; nproc_limit=24; memory_limit=512m ;;
+    process) pids_limit=128; nproc_limit=16; memory_limit=512m ;;
     descriptor) nofile_limit=64 ;;
     tmpfs) work_size=4m ;;
     file) file_limit=1048576 ;;
