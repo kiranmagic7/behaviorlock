@@ -25,7 +25,7 @@ check:
 	shellcheck runner/*.sh scripts/*.sh testdata/control-runner/*.sh testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.sh testdata/tracer-death/*.sh testdata/tracer-failure/*.sh
 	./scripts/test-dco.sh
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-	jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json
+	jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json testdata/sinkhole-fixture/seed/*.json testdata/sinkhole-fixture/seed/node_modules/behaviorlock-sinkhole-fixture/*.json
 
 runner:
 	docker build --pull=false --tag behaviorlock-runner:dev runner

@@ -1,8 +1,17 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export function buildMetadata(spec, lockBytes) {
+import { nearestPackageType, resolvedModuleKind } from "./module-kind.mjs";
+
+export function buildMetadata(spec, lockBytes, importPlan = {
+  importEntrypoint: "",
+  importModuleKind: "unsupported",
+  importSupport: "unsupported",
+  importReason: "entrypoint-unresolved",
+}) {
   const separator = spec.lastIndexOf("@");
   const name = spec.slice(0, separator);
   const lock = JSON.parse(lockBytes.toString("utf8"));
@@ -47,14 +56,62 @@ export function buildMetadata(spec, lockBytes) {
     dependencyLockSha256: `sha256:${createHash("sha256").update(lockBytes).digest("hex")}`,
     acquisitionPolicyVersion: "npm-registry-connect-v1",
     allowedAuthority: "registry.npmjs.org:443",
+    importResolverVersion: "node-resolve-v1",
+    ...importPlan,
   };
+}
+
+export function classifyImportPlan(resolved, packageType = "commonjs", packageRoot = path.dirname(resolved)) {
+  const moduleKind = resolvedModuleKind(resolved, packageRoot, packageType);
+  if (moduleKind === "unsupported") {
+    return {
+      importEntrypoint: resolved.replace(/^\/seed(?=\/)/, "$WORK"),
+      importModuleKind: "unsupported",
+      importSupport: "unsupported",
+      importReason: "unsupported-extension",
+    };
+  }
+  return {
+    importEntrypoint: resolved.replace(/^\/seed(?=\/)/, "$WORK"),
+    importModuleKind: moduleKind,
+    importSupport: "supported",
+    importReason: "",
+  };
+}
+
+export function resolveImportPlan(name, base = "/seed/package.json") {
+  const packageRoot = path.resolve("/seed/node_modules", name);
+  let resolved;
+  try {
+    resolved = createRequire(base).resolve(name);
+  } catch {
+    return {
+      importEntrypoint: "",
+      importModuleKind: "unsupported",
+      importSupport: "unsupported",
+      importReason: "entrypoint-unresolved",
+    };
+  }
+  const relative = path.relative(packageRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return {
+      importEntrypoint: "",
+      importModuleKind: "unsupported",
+      importSupport: "unsupported",
+      importReason: "entrypoint-unresolved",
+    };
+  }
+  const packageType = nearestPackageType(resolved, packageRoot);
+  return classifyImportPlan(resolved, packageType);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const spec = process.argv[2] ?? "";
     const lockBytes = readFileSync("/seed/package-lock.json");
-    process.stdout.write(JSON.stringify(buildMetadata(spec, lockBytes)));
+    const separator = spec.lastIndexOf("@");
+    const name = spec.slice(0, separator);
+    process.stdout.write(JSON.stringify(buildMetadata(spec, lockBytes, resolveImportPlan(name))));
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : "metadata validation failed"}\n`);
     process.exit(65);

@@ -71,6 +71,9 @@ func TestProfilesFlagsNewEnvironmentFingerprintRead(t *testing.T) {
 	if change.RuleID != "BL600" || change.ReviewLevel != "medium" {
 		t.Fatalf("unexpected environment fingerprint classification: %#v", change)
 	}
+	if len(change.Techniques) != 1 || change.Techniques[0].Relationship != "consistent with" || change.Techniques[0].ID != "T1497.001" {
+		t.Fatalf("optional technique context became missing or classificatory: %#v", change.Techniques)
+	}
 }
 
 func TestClassifyEnvironmentFingerprintPaths(t *testing.T) {
@@ -220,6 +223,7 @@ func TestProfilesRequireExplicitExternalAcknowledgement(t *testing.T) {
 	candidate := completeProfile("1.1.0")
 	for _, profile := range []*model.Profile{&baseline, &candidate} {
 		profile.Capture.TraceIntegrity = "external-unverified"
+		profile.Capture.Phase = "external"
 		profile.Capture.NetworkMode = "unknown"
 		profile.Capture.SandboxProfile = "external-unverified"
 		profile.Capture.Coverage.Scope = "external-strace"
@@ -256,5 +260,48 @@ func TestProfilesRejectDifferentObservationPolicies(t *testing.T) {
 	candidate.Capture.ObservationPolicy = "strace-observation-v3"
 	if _, err := Profiles(baseline, candidate, "test"); err == nil || !strings.Contains(err.Error(), "observation policy") {
 		t.Fatalf("different observation policies were not rejected: %v", err)
+	}
+}
+
+func TestProfilesRejectLifecycleAndImportPhaseComparison(t *testing.T) {
+	t.Parallel()
+	baseline := completeProfile("1.0.0")
+	candidate := completeProfile("1.1.0")
+	candidate.Capture.Phase = "import"
+	candidate.Capture.Coverage = model.CaptureCoverage{
+		Scope: "registry-import-entrypoint", Lifecycle: []string{}, Completeness: "partial",
+		Limitations: []string{"Only the resolved import entry point is observed."},
+	}
+	candidate.Capture.Import = &model.ImportInfo{
+		Entrypoint: "$WORK/node_modules/example/index.js", ModuleKind: "commonjs",
+		ResolverVersion: "node-resolve-v1", Support: "supported",
+	}
+	if _, err := Profiles(baseline, candidate, "test"); err == nil || !strings.Contains(err.Error(), "capture phase") {
+		t.Fatalf("lifecycle and import profiles were not rejected explicitly: %v", err)
+	}
+}
+
+func TestProfilesRequireReviewForObservedSequenceChangeWithoutInventingLevel(t *testing.T) {
+	t.Parallel()
+	anchor := model.Behavior{Type: "filesystem.create", Operation: "create", Target: "$WORK/stage", Outcome: "success", Count: 1, SourceCall: "openat"}
+	baseline := completeProfile("1.0.0", anchor)
+	candidate := completeProfile("1.1.0", anchor)
+	baselineSequence := model.ObservationSequence{
+		Scope: "process-lineage-observed-order", BehaviorIDs: []string{baseline.Behaviors[0].ID, baseline.Behaviors[1].ID},
+	}
+	baselineSequence.ID = model.StableSequenceID(baselineSequence)
+	candidateSequence := model.ObservationSequence{
+		Scope: "process-lineage-observed-order", BehaviorIDs: []string{candidate.Behaviors[1].ID, candidate.Behaviors[0].ID},
+	}
+	candidateSequence.ID = model.StableSequenceID(candidateSequence)
+	baseline.Sequences = []model.ObservationSequence{baselineSequence}
+	candidate.Sequences = []model.ObservationSequence{candidateSequence}
+
+	diff, err := Profiles(baseline, candidate, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diff.Summary.ReviewRequired || diff.Summary.HighestReviewLevel != "none" || len(diff.Added) != 0 || len(diff.AddedSequences) != 1 {
+		t.Fatalf("sequence-only change was not represented honestly: %#v", diff)
 	}
 }

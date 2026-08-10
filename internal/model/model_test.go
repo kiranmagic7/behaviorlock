@@ -124,6 +124,53 @@ func TestStableDigestIncludesAcquisitionPolicyFingerprint(t *testing.T) {
 	}
 }
 
+func TestStableDigestIgnoresSinkholeRequestCountsButIncludesCanaryMovement(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	for _, profile := range []*Profile{&left, &right} {
+		profile.Capture.NetworkMode = "sinkhole-loopback-v1"
+		profile.Capture.Canaries = []CanaryDescriptor{{ID: "canary:test", Kind: "environment", Location: "env:TEST_CANARY"}}
+		profile.Capture.Sinkhole = &SinkholeInfo{Mode: "loopback-no-route", ResponderVersion: "inert-sinkhole-v1", CanaryIDs: []string{"canary:test"}}
+	}
+	left.Capture.Sinkhole.HTTPRequests = 1
+	right.Capture.Sinkhole.HTTPRequests = 99
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest != rightDigest {
+		t.Fatal("sinkhole request counts changed the stable digest")
+	}
+	if left.Capture.Sinkhole.HTTPRequests != 1 || right.Capture.Sinkhole.HTTPRequests != 99 {
+		t.Fatal("stable digest mutated retained sinkhole request counts")
+	}
+	right.Capture.Sinkhole.CanaryIDs = nil
+	changed, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == leftDigest {
+		t.Fatal("sinkhole canary movement did not change the stable digest")
+	}
+}
+
+func TestUnsupportedImportProfileIsExplicitWithoutClaimingEvidence(t *testing.T) {
+	t.Parallel()
+	profile := NewProfile(Subject{Ecosystem: "npm", Name: "example", Version: "1.2.3", PURL: "pkg:npm/example@1.2.3"}, "test")
+	profile.Capture.Phase = "import"
+	profile.Capture.Coverage = CaptureCoverage{Scope: "registry-import-entrypoint", Lifecycle: []string{}, Completeness: "partial", Limitations: []string{"Import entry point was not supported."}}
+	profile.Capture.Import = &ImportInfo{ModuleKind: "unsupported", ResolverVersion: "node-resolve-v1", Support: "unsupported", Reason: "entrypoint-unresolved"}
+	profile.Result = Result{Status: "unsupported", ExitCode: 2, Message: "entry point unsupported"}
+	if err := ValidateProfile(profile); err != nil {
+		t.Fatalf("explicit unsupported import profile was rejected: %v", err)
+	}
+}
+
 func TestReadWriteProfileRoundTripAndPermissions(t *testing.T) {
 	t.Parallel()
 	profile := testProfile()

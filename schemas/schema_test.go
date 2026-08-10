@@ -65,7 +65,7 @@ func asJSONValue(t *testing.T, value any) any {
 func TestProfileSchemaAcceptsGeneratedProfile(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err != nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, profile)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -79,14 +79,14 @@ func TestCurrentSchemasAcceptExpandedBehaviorWithRuntimeAttribution(t *testing.T
 	}
 	baseline := schemaProfile("1.0.0")
 	candidate := schemaProfile("1.1.0", behavior)
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, candidate)); err != nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, candidate)); err != nil {
 		t.Fatal(err)
 	}
 	diff, err := compare.Profiles(baseline, candidate, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+	if err := compileSchema(t, "diff-v3.schema.json").Validate(asJSONValue(t, diff)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -102,7 +102,7 @@ func TestCurrentProfileSchemaRejectsNumericRuntimeIdentifiers(t *testing.T) {
 	behaviors := value["behaviors"].([]any)
 	runtime := behaviors[0].(map[string]any)["runtime"].([]any)
 	runtime[0].(map[string]any)["process"] = float64(401)
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(value); err == nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(value); err == nil {
 		t.Fatal("schema accepted a numeric runtime process identifier")
 	}
 }
@@ -111,7 +111,7 @@ func TestProfileSchemaRejectsContradictoryCompletion(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
 	profile.Result.TimedOut = true
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted complete profile with timedOut true")
 	}
 }
@@ -122,6 +122,7 @@ func TestProfileSchemaAcceptsExternalUnverifiedProfile(t *testing.T) {
 	profile.Subject.RegistryIntegrity = ""
 	profile.Subject.DependencyLockSHA256 = ""
 	profile.Capture.TraceIntegrity = "external-unverified"
+	profile.Capture.Phase = "external"
 	profile.Capture.NetworkMode = "unknown"
 	profile.Capture.SandboxProfile = "external-unverified"
 	profile.Capture.Coverage.Scope = "external-strace"
@@ -130,7 +131,7 @@ func TestProfileSchemaAcceptsExternalUnverifiedProfile(t *testing.T) {
 	profile.Capture.Acquisition = nil
 	profile.Capture.EvidenceArtifact.Retention = "external-unverified"
 	profile.Capture.EvidenceArtifact.Envelope = "external-strace"
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err != nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, profile)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -139,7 +140,7 @@ func TestProfileSchemaRejectsEmptyCapturedLifecycle(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
 	profile.Capture.Coverage.Lifecycle = []string{}
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted captured profile with empty lifecycle coverage")
 	}
 }
@@ -148,7 +149,7 @@ func TestProfileSchemaRequiresCapturedAcquisitionFingerprint(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
 	profile.Capture.Acquisition = nil
-	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+	if err := compileSchema(t, "profile-v3.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted a captured profile without acquisition controls")
 	}
 }
@@ -164,7 +165,7 @@ func TestDiffSchemaAcceptsGeneratedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+	if err := compileSchema(t, "diff-v3.schema.json").Validate(asJSONValue(t, diff)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -189,7 +190,7 @@ func TestDiffSchemaAcceptsEnvironmentFingerprintAndOrdinaryReadRules(t *testing.
 	if len(diff.Added) != 2 || diff.Added[0].RuleID != "BL600" || diff.Added[1].RuleID != "BL500" {
 		t.Fatalf("unexpected rules: %#v", diff.Added)
 	}
-	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+	if err := compileSchema(t, "diff-v3.schema.json").Validate(asJSONValue(t, diff)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -207,7 +208,7 @@ func TestDiffSchemaRejectsNumericRuleID(t *testing.T) {
 	}
 	value := asJSONValue(t, diff).(map[string]any)
 	value["added"].([]any)[0].(map[string]any)["ruleId"] = float64(100)
-	if err := compileSchema(t, "diff-v2.schema.json").Validate(value); err == nil {
+	if err := compileSchema(t, "diff-v3.schema.json").Validate(value); err == nil {
 		t.Fatal("schema accepted numeric ruleId")
 	}
 }
@@ -216,4 +217,6 @@ func TestHistoricalSchemasRemainAvailable(t *testing.T) {
 	t.Parallel()
 	compileSchema(t, "profile-v1.schema.json")
 	compileSchema(t, "diff-v1.schema.json")
+	compileSchema(t, "profile-v2.schema.json")
+	compileSchema(t, "diff-v2.schema.json")
 }

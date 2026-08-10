@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildMetadata } from "./metadata.mjs";
+import { buildMetadata, classifyImportPlan } from "./metadata.mjs";
 
 const integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
 
@@ -49,4 +49,21 @@ test("allows a bundled dependency without a separate acquisition URL", () => {
     inBundle: true,
   };
   assert.equal(buildMetadata("example@1.0.0", Buffer.from(JSON.stringify(lock))).integrity, integrity);
+});
+
+test("classifies CommonJS, ESM, and unsupported import entry points explicitly", () => {
+  assert.deepEqual(classifyImportPlan("/seed/node_modules/example/index.cjs"), {
+    importEntrypoint: "$WORK/node_modules/example/index.cjs",
+    importModuleKind: "commonjs",
+    importSupport: "supported",
+    importReason: "",
+  });
+  assert.equal(classifyImportPlan("/seed/node_modules/example/index.js", "module").importModuleKind, "esm");
+  assert.equal(classifyImportPlan("/seed/node_modules/example/index.mjs").importModuleKind, "esm");
+  assert.deepEqual(classifyImportPlan("/seed/node_modules/example/addon.node"), {
+    importEntrypoint: "$WORK/node_modules/example/addon.node",
+    importModuleKind: "unsupported",
+    importSupport: "unsupported",
+    importReason: "unsupported-extension",
+  });
 });

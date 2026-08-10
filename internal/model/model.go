@@ -21,15 +21,18 @@ import (
 )
 
 const (
-	ProfileSchemaVersion = "2.0.0"
-	DiffSchemaVersion    = "2.0.0"
-	ProfileKind          = "npm.install.profile"
-	DiffKind             = "npm.install.diff"
+	ProfileSchemaVersion = "3.0.0"
+	DiffSchemaVersion    = "3.0.0"
+	ProfileKind          = "npm.observation.profile"
+	DiffKind             = "npm.observation.diff"
 	maxProfileBehaviors  = 250_000
 	maxBehaviorCount     = 250_000
 	maxCoverageLimits    = 64
 	maxEvidenceRefs      = 8
 	maxEvidenceBytes     = 64 << 20
+	maxCanaries          = 32
+	maxSequences         = 256
+	maxSequenceEvents    = 32
 )
 
 const (
@@ -61,22 +64,49 @@ type CaptureCoverage struct {
 }
 
 type CaptureInfo struct {
-	RunnerImage       string            `json:"runnerImage,omitempty"`
-	RunnerImageID     string            `json:"runnerImageId,omitempty"`
-	Architecture      string            `json:"architecture,omitempty"`
-	NodeVersion       string            `json:"nodeVersion,omitempty"`
-	NPMVersion        string            `json:"npmVersion,omitempty"`
-	StraceVersion     string            `json:"straceVersion,omitempty"`
-	NetworkMode       string            `json:"networkMode"`
-	SandboxProfile    string            `json:"sandboxProfile"`
-	TraceIntegrity    string            `json:"traceIntegrity"`
-	ObservationPolicy string            `json:"observationPolicy"`
-	Attestation       string            `json:"attestation"`
-	DurationMillis    int64             `json:"durationMillis,omitempty"`
-	Coverage          CaptureCoverage   `json:"coverage"`
-	Acquisition       *AcquisitionInfo  `json:"acquisition,omitempty"`
-	EvidenceArtifact  *EvidenceArtifact `json:"evidenceArtifact,omitempty"`
-	Experimental      bool              `json:"experimental"`
+	RunnerImage       string             `json:"runnerImage,omitempty"`
+	RunnerImageID     string             `json:"runnerImageId,omitempty"`
+	Architecture      string             `json:"architecture,omitempty"`
+	NodeVersion       string             `json:"nodeVersion,omitempty"`
+	NPMVersion        string             `json:"npmVersion,omitempty"`
+	StraceVersion     string             `json:"straceVersion,omitempty"`
+	NetworkMode       string             `json:"networkMode"`
+	SandboxProfile    string             `json:"sandboxProfile"`
+	TraceIntegrity    string             `json:"traceIntegrity"`
+	ObservationPolicy string             `json:"observationPolicy"`
+	Attestation       string             `json:"attestation"`
+	DurationMillis    int64              `json:"durationMillis,omitempty"`
+	Phase             string             `json:"phase"`
+	Coverage          CaptureCoverage    `json:"coverage"`
+	Acquisition       *AcquisitionInfo   `json:"acquisition,omitempty"`
+	Import            *ImportInfo        `json:"import,omitempty"`
+	Sinkhole          *SinkholeInfo      `json:"sinkhole,omitempty"`
+	Canaries          []CanaryDescriptor `json:"canaries"`
+	EvidenceArtifact  *EvidenceArtifact  `json:"evidenceArtifact,omitempty"`
+	Experimental      bool               `json:"experimental"`
+}
+
+type ImportInfo struct {
+	Entrypoint      string `json:"entrypoint"`
+	ModuleKind      string `json:"moduleKind"`
+	ResolverVersion string `json:"resolverVersion"`
+	Support         string `json:"support"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+type SinkholeInfo struct {
+	Mode             string   `json:"mode"`
+	ResponderVersion string   `json:"responderVersion"`
+	DNSRequests      int      `json:"dnsRequests"`
+	TCPConnections   int      `json:"tcpConnections"`
+	HTTPRequests     int      `json:"httpRequests"`
+	CanaryIDs        []string `json:"canaryIds,omitempty"`
+}
+
+type CanaryDescriptor struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Location string `json:"location"`
 }
 
 type AcquisitionInfo struct {
@@ -117,11 +147,19 @@ type Behavior struct {
 	Outcome    string           `json:"outcome"`
 	Errno      string           `json:"errno,omitempty"`
 	Sensitive  bool             `json:"sensitive,omitempty"`
+	CanaryIDs  []string         `json:"canaryIds,omitempty"`
 	Count      int              `json:"count"`
 	ID         string           `json:"id"`
 	Evidence   []EvidenceRef    `json:"evidence"`
 	Runtime    []RuntimeContext `json:"runtime,omitempty"`
 	SourceCall string           `json:"sourceSyscall"`
+}
+
+type ObservationSequence struct {
+	ID          string   `json:"id"`
+	Scope       string   `json:"scope"`
+	BehaviorIDs []string `json:"behaviorIds"`
+	CanaryIDs   []string `json:"canaryIds,omitempty"`
 }
 
 type RuntimeContext struct {
@@ -132,20 +170,28 @@ type RuntimeContext struct {
 }
 
 type Profile struct {
-	SchemaVersion string      `json:"schemaVersion"`
-	Kind          string      `json:"kind"`
-	Tool          ToolInfo    `json:"tool"`
-	Subject       Subject     `json:"subject"`
-	Capture       CaptureInfo `json:"capture"`
-	Result        Result      `json:"result"`
-	Behaviors     []Behavior  `json:"behaviors"`
+	SchemaVersion string                `json:"schemaVersion"`
+	Kind          string                `json:"kind"`
+	Tool          ToolInfo              `json:"tool"`
+	Subject       Subject               `json:"subject"`
+	Capture       CaptureInfo           `json:"capture"`
+	Result        Result                `json:"result"`
+	Behaviors     []Behavior            `json:"behaviors"`
+	Sequences     []ObservationSequence `json:"sequences"`
+}
+
+type TechniqueRef struct {
+	Framework    string `json:"framework"`
+	ID           string `json:"id"`
+	Relationship string `json:"relationship"`
 }
 
 type Change struct {
-	ReviewLevel string   `json:"reviewLevel"`
-	RuleID      string   `json:"ruleId"`
-	Reason      string   `json:"reason"`
-	Behavior    Behavior `json:"behavior"`
+	ReviewLevel string         `json:"reviewLevel"`
+	RuleID      string         `json:"ruleId"`
+	Reason      string         `json:"reason"`
+	Behavior    Behavior       `json:"behavior"`
+	Techniques  []TechniqueRef `json:"techniques,omitempty"`
 }
 
 type DiffSummary struct {
@@ -156,17 +202,20 @@ type DiffSummary struct {
 }
 
 type Diff struct {
-	SchemaVersion   string      `json:"schemaVersion"`
-	Kind            string      `json:"kind"`
-	Tool            ToolInfo    `json:"tool"`
-	Baseline        Subject     `json:"baseline"`
-	Candidate       Subject     `json:"candidate"`
-	BaselineDigest  string      `json:"baselineDigest"`
-	CandidateDigest string      `json:"candidateDigest"`
-	Added           []Change    `json:"added"`
-	Removed         []Behavior  `json:"removed"`
-	Summary         DiffSummary `json:"summary"`
-	Limitations     []string    `json:"limitations"`
+	SchemaVersion    string                `json:"schemaVersion"`
+	Kind             string                `json:"kind"`
+	Tool             ToolInfo              `json:"tool"`
+	Phase            string                `json:"phase"`
+	Baseline         Subject               `json:"baseline"`
+	Candidate        Subject               `json:"candidate"`
+	BaselineDigest   string                `json:"baselineDigest"`
+	CandidateDigest  string                `json:"candidateDigest"`
+	Added            []Change              `json:"added"`
+	Removed          []Behavior            `json:"removed"`
+	AddedSequences   []ObservationSequence `json:"addedSequences"`
+	RemovedSequences []ObservationSequence `json:"removedSequences"`
+	Summary          DiffSummary           `json:"summary"`
+	Limitations      []string              `json:"limitations"`
 }
 
 func NewProfile(subject Subject, toolVersion string) Profile {
@@ -181,6 +230,7 @@ func NewProfile(subject Subject, toolVersion string) Profile {
 			TraceIntegrity:    "isolated-root-tracer",
 			ObservationPolicy: ObservationPolicy,
 			Attestation:       "none",
+			Phase:             "lifecycle",
 			Coverage: CaptureCoverage{
 				Scope:        "registry-install-lifecycle",
 				Lifecycle:    []string{"preinstall", "install", "postinstall"},
@@ -191,10 +241,12 @@ func NewProfile(subject Subject, toolVersion string) Profile {
 					"Environment variable reads are not observable through strace.",
 				},
 			},
+			Canaries:     []CanaryDescriptor{},
 			Experimental: true,
 		},
 		Result:    Result{Status: "trace_incomplete", ExitCode: 2},
 		Behaviors: []Behavior{},
+		Sequences: []ObservationSequence{},
 	}
 }
 
@@ -202,6 +254,7 @@ func (p *Profile) Normalize() {
 	counts := make(map[string]Behavior, len(p.Behaviors))
 	for _, behavior := range p.Behaviors {
 		behavior.Arguments = append([]string(nil), behavior.Arguments...)
+		behavior.CanaryIDs = normalizeStrings(behavior.CanaryIDs)
 		behavior.Evidence = normalizeEvidenceRefs(behavior.Evidence)
 		behavior.Runtime = normalizeRuntimeContexts(behavior.Runtime)
 		key := BehaviorKey(behavior)
@@ -225,6 +278,11 @@ func (p *Profile) Normalize() {
 	})
 	sort.Strings(p.Capture.Coverage.Lifecycle)
 	sort.Strings(p.Capture.Coverage.Limitations)
+	p.Capture.Canaries = normalizeCanaryDescriptors(p.Capture.Canaries)
+	if p.Capture.Sinkhole != nil {
+		p.Capture.Sinkhole.CanaryIDs = normalizeStrings(p.Capture.Sinkhole.CanaryIDs)
+	}
+	p.Sequences = normalizeObservationSequences(p.Sequences)
 }
 
 func StableBehaviorID(behavior Behavior) string {
@@ -315,6 +373,7 @@ func BehaviorKey(b Behavior) string {
 		b.Outcome,
 		b.Errno,
 		fmt.Sprintf("%t", b.Sensitive),
+		strings.Join(normalizeStrings(b.CanaryIDs), "\x1f"),
 		b.SourceCall,
 	}, "\x1e")
 }
@@ -323,19 +382,32 @@ func (p Profile) StableDigest() (string, error) {
 	p.Behaviors = append([]Behavior(nil), p.Behaviors...)
 	p.Capture.Coverage.Lifecycle = append([]string(nil), p.Capture.Coverage.Lifecycle...)
 	p.Capture.Coverage.Limitations = append([]string(nil), p.Capture.Coverage.Limitations...)
+	p.Capture.Canaries = append([]CanaryDescriptor(nil), p.Capture.Canaries...)
+	if p.Capture.Sinkhole != nil {
+		sinkhole := *p.Capture.Sinkhole
+		sinkhole.CanaryIDs = append([]string(nil), sinkhole.CanaryIDs...)
+		p.Capture.Sinkhole = &sinkhole
+	}
+	p.Sequences = append([]ObservationSequence(nil), p.Sequences...)
 	p.Normalize()
 	canonical := struct {
-		SchemaVersion string      `json:"schemaVersion"`
-		Kind          string      `json:"kind"`
-		Tool          ToolInfo    `json:"tool"`
-		Subject       Subject     `json:"subject"`
-		Capture       CaptureInfo `json:"capture"`
-		Result        Result      `json:"result"`
-		Behaviors     []Behavior  `json:"behaviors"`
-	}{p.SchemaVersion, p.Kind, p.Tool, p.Subject, p.Capture, p.Result, p.Behaviors}
+		SchemaVersion string                `json:"schemaVersion"`
+		Kind          string                `json:"kind"`
+		Tool          ToolInfo              `json:"tool"`
+		Subject       Subject               `json:"subject"`
+		Capture       CaptureInfo           `json:"capture"`
+		Result        Result                `json:"result"`
+		Behaviors     []Behavior            `json:"behaviors"`
+		Sequences     []ObservationSequence `json:"sequences"`
+	}{p.SchemaVersion, p.Kind, p.Tool, p.Subject, p.Capture, p.Result, p.Behaviors, p.Sequences}
 	canonical.Behaviors = append([]Behavior(nil), canonical.Behaviors...)
 	canonical.Capture.DurationMillis = 0
 	canonical.Capture.EvidenceArtifact = nil
+	if canonical.Capture.Sinkhole != nil {
+		canonical.Capture.Sinkhole.DNSRequests = 0
+		canonical.Capture.Sinkhole.TCPConnections = 0
+		canonical.Capture.Sinkhole.HTTPRequests = 0
+	}
 	for index := range canonical.Behaviors {
 		canonical.Behaviors[index].Count = 1
 		canonical.Behaviors[index].Evidence = nil
@@ -376,7 +448,7 @@ func ValidateProfile(p Profile) error {
 		return errors.New("profile dependency lock digest is invalid")
 	}
 	switch p.Result.Status {
-	case "complete", "command_failed", "timed_out", "trace_incomplete", "resource_exhausted":
+	case "complete", "command_failed", "timed_out", "trace_incomplete", "resource_exhausted", "unsupported":
 	default:
 		return fmt.Errorf("unsupported result status %q", p.Result.Status)
 	}
@@ -407,6 +479,9 @@ func ValidateProfile(p Profile) error {
 		!safeField(p.Capture.SandboxProfile, 128) {
 		return errors.New("capture metadata contains unsafe text")
 	}
+	if err := validateCaptureMode(p.Capture, p.Result.Status); err != nil {
+		return err
+	}
 	if err := validateCoverage(p.Capture.Coverage); err != nil {
 		return err
 	}
@@ -422,7 +497,7 @@ func ValidateProfile(p Profile) error {
 	}
 	switch p.Capture.TraceIntegrity {
 	case "isolated-root-tracer":
-		if p.Capture.NetworkMode != "none" || p.Capture.SandboxProfile != "behaviorlock-linux-npm-v1" {
+		if (p.Capture.NetworkMode != "none" && p.Capture.NetworkMode != "sinkhole-loopback-v1") || p.Capture.SandboxProfile != "behaviorlock-linux-npm-v1" {
 			return errors.New("captured profile has inconsistent sandbox evidence")
 		}
 		if p.Result.Status == "complete" || p.Result.Status == "command_failed" {
@@ -454,11 +529,8 @@ func ValidateProfile(p Profile) error {
 				return errors.New("captured profile is missing retained raw evidence metadata")
 			}
 		}
-		if p.Capture.Coverage.Scope != "registry-install-lifecycle" || p.Capture.Coverage.Completeness != "partial" || !sameStrings(p.Capture.Coverage.Lifecycle, []string{"install", "postinstall", "preinstall"}) {
-			return errors.New("captured profile coverage is inconsistent")
-		}
 	case "external-unverified":
-		if p.Capture.NetworkMode != "unknown" || p.Capture.SandboxProfile != "external-unverified" || p.Capture.Coverage.Scope != "external-strace" || p.Capture.Coverage.Completeness != "unverified" || len(p.Capture.Coverage.Lifecycle) != 0 {
+		if p.Capture.Phase != "external" || p.Capture.NetworkMode != "unknown" || p.Capture.SandboxProfile != "external-unverified" || p.Capture.Coverage.Scope != "external-strace" || p.Capture.Coverage.Completeness != "unverified" || len(p.Capture.Coverage.Lifecycle) != 0 {
 			return errors.New("external profile must not attest sandbox conditions")
 		}
 		if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && (p.Capture.EvidenceArtifact == nil || p.Capture.EvidenceArtifact.Retention != "external-unverified" || p.Capture.EvidenceArtifact.Envelope != "external-strace") {
@@ -480,6 +552,71 @@ func ValidateProfile(p Profile) error {
 		if err := validateBehavior(behavior, p.Capture.EvidenceArtifact); err != nil {
 			return fmt.Errorf("behavior %d: %w", index, err)
 		}
+	}
+	if err := validateObservationMetadata(p); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCaptureMode(capture CaptureInfo, resultStatus string) error {
+	switch capture.Phase {
+	case "lifecycle":
+		if capture.Import != nil || capture.Coverage.Scope != "registry-install-lifecycle" || capture.Coverage.Completeness != "partial" || !sameStrings(capture.Coverage.Lifecycle, []string{"install", "postinstall", "preinstall"}) {
+			return errors.New("lifecycle profile capture metadata is inconsistent")
+		}
+	case "import":
+		if capture.Coverage.Scope != "registry-import-entrypoint" || capture.Coverage.Completeness != "partial" || len(capture.Coverage.Lifecycle) != 0 {
+			return errors.New("import profile capture metadata is inconsistent")
+		}
+		if capture.Import == nil {
+			if resultStatus == "complete" || resultStatus == "command_failed" || resultStatus == "unsupported" {
+				return errors.New("completed or resolved import profile is missing import metadata")
+			}
+			break
+		}
+		if !safeField(capture.Import.Entrypoint, 4096) || !safeField(capture.Import.ResolverVersion, 128) || capture.Import.ResolverVersion != "node-resolve-v1" {
+			return errors.New("import resolution metadata is invalid")
+		}
+		switch capture.Import.ModuleKind {
+		case "commonjs", "esm", "unsupported":
+		default:
+			return errors.New("import module kind is invalid")
+		}
+		switch capture.Import.Support {
+		case "supported", "unsupported":
+		default:
+			return errors.New("import support outcome is invalid")
+		}
+		if (capture.Import.Support == "supported") != (capture.Import.ModuleKind != "unsupported" && capture.Import.Entrypoint != "") {
+			return errors.New("import support and entrypoint metadata disagree")
+		}
+		if capture.Import.Support == "supported" {
+			if capture.Import.Reason != "" {
+				return errors.New("supported import metadata contains an unsupported reason")
+			}
+		} else if capture.Import.Reason != "entrypoint-unresolved" && capture.Import.Reason != "unsupported-extension" {
+			return errors.New("unsupported import metadata reason is invalid")
+		}
+	case "external":
+		if capture.Import != nil {
+			return errors.New("external profile must not contain import metadata")
+		}
+	default:
+		return errors.New("capture phase is invalid")
+	}
+	if capture.NetworkMode == "sinkhole-loopback-v1" {
+		if capture.Sinkhole == nil || capture.Sinkhole.Mode != "loopback-no-route" || capture.Sinkhole.ResponderVersion != "inert-sinkhole-v1" ||
+			capture.Sinkhole.DNSRequests < 0 || capture.Sinkhole.DNSRequests > 10_000 || capture.Sinkhole.TCPConnections < 0 || capture.Sinkhole.TCPConnections > 10_000 || capture.Sinkhole.HTTPRequests < 0 || capture.Sinkhole.HTTPRequests > 10_000 {
+			return errors.New("sinkhole capture metadata is invalid")
+		}
+		for _, canaryID := range capture.Sinkhole.CanaryIDs {
+			if !validCanaryID(canaryID) {
+				return errors.New("sinkhole canary observation is invalid")
+			}
+		}
+	} else if capture.Sinkhole != nil {
+		return errors.New("non-sinkhole profile contains sinkhole metadata")
 	}
 	return nil
 }
@@ -552,7 +689,7 @@ func validateBehavior(behavior Behavior, artifact *EvidenceArtifact) error {
 			return errors.New("argument is unsafe")
 		}
 	}
-	if len(behavior.Arguments) > 32 || behavior.Count < 1 || behavior.Count > maxBehaviorCount {
+	if len(behavior.Arguments) > 32 || len(behavior.CanaryIDs) > maxCanaries || behavior.Count < 1 || behavior.Count > maxBehaviorCount {
 		return errors.New("argument or count limit is invalid")
 	}
 	switch behavior.Outcome {

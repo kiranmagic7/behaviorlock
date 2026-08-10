@@ -7,6 +7,7 @@ probe_network=""
 probe_volume=""
 tracer_death_container=""
 resource_container=""
+sinkhole_container=""
 cleanup_integration() {
   if [ -n "$probe_proxy" ]; then
     docker rm --force "$probe_proxy" >/dev/null 2>&1 || true
@@ -17,7 +18,7 @@ cleanup_integration() {
   if [ -n "$probe_network" ]; then
     docker network rm "$probe_network" >/dev/null 2>&1 || true
   fi
-  for test_container in "$tracer_death_container" "$resource_container"; do
+  for test_container in "$tracer_death_container" "$resource_container" "$sinkhole_container"; do
     if [ -n "$test_container" ]; then
       docker rm --force "$test_container" >/dev/null 2>&1 || true
     fi
@@ -34,13 +35,20 @@ profile_evidence="$profile.evidence.strace"
 run_trace_container() {
   runner_image="$1"
   container_name="${2:-}"
+  network_mode="${3:-none}"
+  package_spec="${4:-behaviorlock-fixture@1.0.0}"
+  capture_phase="${5:-lifecycle}"
+  sinkhole_enabled=0
+  case "$network_mode" in
+    container:behaviorlock-sinkhole-*) sinkhole_enabled=1 ;;
+  esac
   if [ -n "$container_name" ]; then
     set -- --name "$container_name"
   else
     set -- --rm
   fi
   docker run "$@" \
-    --network none \
+    --network "$network_mode" \
     --read-only \
     --user 0:0 \
     --cap-drop ALL \
@@ -68,6 +76,15 @@ run_trace_container() {
     --env npm_config_audit=false \
     --env npm_config_fund=false \
     --env npm_config_update_notifier=false \
+    --env "BEHAVIORLOCK_SINKHOLE_ENABLED=$sinkhole_enabled" \
+    --env BEHAVIORLOCK_CANARY_SSH=behaviorlock-canary.invalid/integration-ssh/0000000000000001 \
+    --env BEHAVIORLOCK_CANARY_AWS_FILE=behaviorlock-canary.invalid/integration-aws-file/0000000000000002 \
+    --env BEHAVIORLOCK_CANARY_DOCKER=behaviorlock-canary.invalid/integration-docker/0000000000000003 \
+    --env BEHAVIORLOCK_CANARY_NPM_FILE=behaviorlock-canary.invalid/integration-npm-file/0000000000000004 \
+    --env AWS_ACCESS_KEY_ID=behaviorlock-canary.invalid/integration-aws-id/0000000000000005 \
+    --env AWS_SECRET_ACCESS_KEY=behaviorlock-canary.invalid/integration-aws-secret/0000000000000006 \
+    --env NPM_TOKEN=behaviorlock-canary.invalid/integration-npm-token/0000000000000007 \
+    --env GITHUB_TOKEN=behaviorlock-canary.invalid/integration-github-token/0000000000000008 \
     --env HTTP_PROXY= \
     --env HTTPS_PROXY= \
     --env ALL_PROXY= \
@@ -76,7 +93,7 @@ run_trace_container() {
     --env https_proxy= \
     --env all_proxy= \
     --env no_proxy= \
-    "$runner_image" trace behaviorlock-fixture@1.0.0
+    "$runner_image" trace "$package_spec" "$capture_phase"
 }
 
 run_resource_trace_container() {
@@ -136,6 +153,14 @@ run_resource_trace_container() {
     --env npm_config_fund=false \
     --env npm_config_update_notifier=false \
     --env "BEHAVIORLOCK_RESOURCE_MODE=$fixture_mode" \
+    --env BEHAVIORLOCK_CANARY_SSH=behaviorlock-canary.invalid/integration-ssh/0000000000000001 \
+    --env BEHAVIORLOCK_CANARY_AWS_FILE=behaviorlock-canary.invalid/integration-aws-file/0000000000000002 \
+    --env BEHAVIORLOCK_CANARY_DOCKER=behaviorlock-canary.invalid/integration-docker/0000000000000003 \
+    --env BEHAVIORLOCK_CANARY_NPM_FILE=behaviorlock-canary.invalid/integration-npm-file/0000000000000004 \
+    --env AWS_ACCESS_KEY_ID=behaviorlock-canary.invalid/integration-aws-id/0000000000000005 \
+    --env AWS_SECRET_ACCESS_KEY=behaviorlock-canary.invalid/integration-aws-secret/0000000000000006 \
+    --env NPM_TOKEN=behaviorlock-canary.invalid/integration-npm-token/0000000000000007 \
+    --env GITHUB_TOKEN=behaviorlock-canary.invalid/integration-github-token/0000000000000008 \
     --env HTTP_PROXY= \
     --env HTTPS_PROXY= \
     --env ALL_PROXY= \
@@ -144,7 +169,7 @@ run_resource_trace_container() {
     --env https_proxy= \
     --env all_proxy= \
     --env no_proxy= \
-    behaviorlock-resource-fixture:dev trace behaviorlock-resource-fixture@1.0.0
+    behaviorlock-resource-fixture:dev trace behaviorlock-resource-fixture@1.0.0 lifecycle
 }
 
 remove_resource_container() {
@@ -172,7 +197,7 @@ require_resource_match() {
 }
 
 assert_no_capture_resources() {
-  if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy)-'; then
+  if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy|sinkhole)-'; then
     echo "capture left an analysis container behind" >&2
     exit 1
   fi
@@ -223,7 +248,7 @@ require_trace_match '^BEHAVIORLOCK_TRACE_V1$' 'missing trace header'
 require_trace_match '^BEHAVIORLOCK_TRACE_END exit=0$' 'lifecycle or tracer returned nonzero'
 require_trace_match '/proc/self/status' 'fixture did not inspect its effective capabilities'
 require_trace_match '/trace.*(EACCES|EPERM)' 'package code was not denied access to the trace directory'
-if grep -q 'BEHAVIORLOCK_CANARY_DO_NOT_USE' "$trace_output"; then
+if grep -q 'behaviorlock-canary.invalid/' "$trace_output"; then
   echo "trace disclosed canary secret contents" >&2
   exit 1
 fi
@@ -442,6 +467,102 @@ grep -q '"allowedAuthority": "registry.npmjs.org:443"' "$capture_profile"
 
 assert_no_capture_resources
 
+sinkhole_profile="$temp_dir/sinkhole.profile.json"
+"$temp_dir/behaviorlock" capture \
+  --experimental \
+  --phase import \
+  --sinkhole \
+  --package is-number@7.0.0 \
+  --timeout 3m \
+  --output "$sinkhole_profile"
+"$temp_dir/behaviorlock" validate --profile "$sinkhole_profile"
+jq -e '.capture.phase == "import" and .capture.networkMode == "sinkhole-loopback-v1" and .capture.import.moduleKind == "commonjs" and .capture.import.support == "supported" and .capture.sinkhole.mode == "loopback-no-route" and .capture.sinkhole.responderVersion == "inert-sinkhole-v1"' "$sinkhole_profile" >/dev/null
+if grep -q 'behaviorlock-canary.invalid/' "$sinkhole_profile"; then
+  echo "profile disclosed generated canary values" >&2
+  exit 1
+fi
+assert_no_capture_resources
+
+docker build --pull=false --tag behaviorlock-sinkhole-fixture:dev testdata/sinkhole-fixture
+offline_sinkhole_output="$temp_dir/sinkhole-offline.out"
+run_trace_container behaviorlock-sinkhole-fixture:dev "" none behaviorlock-sinkhole-fixture@1.0.0 import > "$offline_sinkhole_output"
+grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$offline_sinkhole_output"
+if grep -q '/work/behaviorlock-sinkhole-stage' "$offline_sinkhole_output"; then
+  echo "synthetic second stage progressed during the offline default" >&2
+  exit 1
+fi
+
+sinkhole_container="behaviorlock-sinkhole-fixture-$network_suffix"
+docker run --detach \
+  --name "$sinkhole_container" \
+  --network none \
+  --read-only \
+  --user 0:0 \
+  --cap-drop ALL \
+  --cap-add NET_BIND_SERVICE \
+  --security-opt no-new-privileges:true \
+  --pids-limit 64 \
+  --memory 128m \
+  --memory-swap 128m \
+  --cpus 0.5 \
+  --ulimit nofile=256:256 \
+  --ulimit nproc=64:64 \
+  --ulimit core=0:0 \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=0,gid=0,mode=1777 \
+  --env BEHAVIORLOCK_SINKHOLE_CANARIES=W3siaWQiOiJjYW5hcnk6Z2l0aHViLXRva2VuIiwidmFsdWUiOiJiZWhhdmlvcmxvY2stY2FuYXJ5LmludmFsaWQvaW50ZWdyYXRpb24tZ2l0aHViLXRva2VuLzAwMDAwMDAwMDAwMDAwMDgifV0 \
+  behaviorlock-runner:dev sinkhole >/dev/null
+sinkhole_ready=false
+sinkhole_attempt=0
+while [ "$sinkhole_attempt" -lt 100 ]; do
+  if docker logs "$sinkhole_container" 2>/dev/null | grep -q '^BEHAVIORLOCK_SINKHOLE_READY_V1 inert-sinkhole-v1$'; then
+    sinkhole_ready=true
+    break
+  fi
+  sinkhole_attempt=$((sinkhole_attempt + 1))
+  sleep 0.05
+done
+if [ "$sinkhole_ready" != true ]; then
+  echo "inert sinkhole did not become ready" >&2
+  docker logs "$sinkhole_container" >&2 || true
+  exit 1
+fi
+if [ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$sinkhole_container")" != none ]; then
+  echo "inert sinkhole received a routed network" >&2
+  exit 1
+fi
+if [ "$(docker exec "$sinkhole_container" awk '/^Uid:/ { print $2 }' /proc/1/status)" != "65532" ]; then
+  echo "inert sinkhole PID 1 did not drop to uid 65532" >&2
+  exit 1
+fi
+if [ "$(docker exec "$sinkhole_container" awk '/^CapEff:/ { print $2 }' /proc/1/status)" != "0000000000000400" ]; then
+  echo "inert sinkhole retained capabilities beyond NET_BIND_SERVICE" >&2
+  exit 1
+fi
+
+sinkhole_network_probe='const net=require("node:net"); async function test(host,port,want){return new Promise((resolve)=>{const s=net.connect({host,port}); const done=(value)=>{s.destroy();resolve(value===want)}; s.once("connect",()=>done(true)); s.once("error",()=>done(false)); s.setTimeout(500,()=>done(false));});} (async()=>{if(!(await test("127.0.0.1",80,true)))process.exit(1); for(const target of [["1.1.1.1",443],["10.0.0.1",443],["169.254.169.254",80],["172.17.0.1",80]])if(!(await test(target[0],target[1],false)))process.exit(1);})().catch(()=>process.exit(1));'
+docker run --rm \
+  --network "container:$sinkhole_container" \
+  --user 65532:65532 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --entrypoint node \
+  behaviorlock-runner:dev -e "$sinkhole_network_probe"
+
+sinkhole_stage_output="$temp_dir/sinkhole-stage.out"
+run_trace_container behaviorlock-sinkhole-fixture:dev "" "container:$sinkhole_container" behaviorlock-sinkhole-fixture@1.0.0 import > "$sinkhole_stage_output"
+grep -q '^BEHAVIORLOCK_TRACE_END exit=0$' "$sinkhole_stage_output"
+grep -q '/work/behaviorlock-sinkhole-stage' "$sinkhole_stage_output"
+sinkhole_logs="$temp_dir/sinkhole.log"
+docker logs "$sinkhole_container" > "$sinkhole_logs"
+grep -q 'BEHAVIORLOCK_SINKHOLE_V1 {"kind":"dns","canaryIds":\[\]}' "$sinkhole_logs"
+grep -q 'BEHAVIORLOCK_SINKHOLE_V1 {"kind":"http","canaryIds":\["canary:github-token"\]}' "$sinkhole_logs"
+if grep -q 'behaviorlock-canary.invalid/' "$sinkhole_logs"; then
+  echo "sinkhole audit retained a canary value or request payload" >&2
+  exit 1
+fi
+docker rm --force "$sinkhole_container" >/dev/null
+sinkhole_container=""
+
 docker build --pull=false --tag behaviorlock-tracer-failure:dev testdata/tracer-failure
 failure_output="$temp_dir/tracer-failure.out"
 failure_error="$temp_dir/tracer-failure.err"
@@ -551,15 +672,17 @@ for control_mode in timeout oom output signal; do
   control_profile="$temp_dir/control-$control_mode.profile.json"
   control_error="$temp_dir/control-$control_mode.err"
   control_timeout=2m
+  control_phase=lifecycle
   expected_status=trace_incomplete
   case "$control_mode" in
-    timeout) control_timeout=20s; expected_status=timed_out ;;
-    oom) expected_status=resource_exhausted ;;
+    timeout) control_timeout=20s; expected_status=timed_out; control_phase=import ;;
+    oom) expected_status=resource_exhausted; control_phase=import ;;
     output|signal) expected_status=trace_incomplete ;;
   esac
   set +e
   "$temp_dir/behaviorlock" capture \
     --experimental \
+    --phase "$control_phase" \
     --runner "$control_image" \
     --package is-number@7.0.0 \
     --timeout "$control_timeout" \

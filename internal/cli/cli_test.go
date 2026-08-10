@@ -125,10 +125,14 @@ func TestHumanReportsCarryEvidenceReferencesWithoutVerdicts(t *testing.T) {
 		SourceCall: "connect",
 	}
 	diff := model.Diff{
+		Phase:     "lifecycle",
 		Baseline:  model.Subject{Name: "example", Version: "1.0.0"},
 		Candidate: model.Subject{Name: "example", Version: "1.1.0"},
-		Added:     []model.Change{{ReviewLevel: "high", RuleID: "BL200", Reason: "new network attempt", Behavior: behavior}},
-		Summary:   model.DiffSummary{Added: 1, ReviewRequired: true, HighestReviewLevel: "high"},
+		Added: []model.Change{{ReviewLevel: "high", RuleID: "BL200", Reason: "new network attempt", Behavior: behavior, Techniques: []model.TechniqueRef{{
+			Framework: "MITRE ATT&CK", ID: "T1059", Relationship: "consistent with",
+		}}}},
+		Removed: []model.Behavior{behavior},
+		Summary: model.DiffSummary{Added: 1, ReviewRequired: true, HighestReviewLevel: "high"},
 	}
 	for name, rendered := range map[string]string{"text": renderText(diff), "markdown": renderMarkdown(diff)} {
 		if !strings.Contains(rendered, "sha256:bbbbbbbbbbbb:L7") {
@@ -136,6 +140,9 @@ func TestHumanReportsCarryEvidenceReferencesWithoutVerdicts(t *testing.T) {
 		}
 		if strings.Contains(strings.ToLower(rendered), "verdict") {
 			t.Fatalf("%s report still contains verdict language: %q", name, rendered)
+		}
+		if !strings.Contains(rendered, "consistent with MITRE ATT&CK T1059") || !strings.Contains(rendered, "REMOVED") && !strings.Contains(rendered, "Removed observed behavior") {
+			t.Fatalf("%s report omitted optional technique or removed-behavior context: %q", name, rendered)
 		}
 	}
 }

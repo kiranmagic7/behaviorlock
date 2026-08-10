@@ -57,6 +57,8 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 	evidenceOutput := flags.String("evidence-output", "", "raw evidence output path; defaults beside a file profile")
 	timeout := flags.Duration("timeout", 2*time.Minute, "capture wall clock limit")
 	runnerImage := flags.String("runner", capture.RunnerImage, "runner image tag, digest reference, or local content ID")
+	phase := flags.String("phase", "lifecycle", "capture phase: lifecycle or import")
+	sinkhole := flags.Bool("sinkhole", false, "use the experimental inert loopback sinkhole instead of offline execution")
 	experimental := flags.Bool("experimental", false, "acknowledge the experimental capture boundary")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
@@ -81,7 +83,7 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	profile, rawEvidence, captureErr := runner.CaptureWithEvidence(context.Background(), spec, capture.Config{
-		Timeout: *timeout, ToolVersion: Version, RunnerImage: *runnerImage,
+		Timeout: *timeout, ToolVersion: Version, RunnerImage: *runnerImage, Phase: *phase, Sinkhole: *sinkhole,
 	})
 	if profile.Subject.Name != "" {
 		if err := writeProfileArtifacts(*output, evidencePath, rawEvidence, profile, stdout); err != nil {
@@ -113,7 +115,7 @@ func runProfile(arguments []string, stdout, stderr io.Writer) int {
 	tracePath := flags.String("trace", "", "raw strace input path")
 	output := flags.String("output", "-", "profile output path or - for stdout")
 	evidenceOutput := flags.String("evidence-output", "", "retained raw evidence output path; defaults beside a file profile")
-	commandExit := flags.Int("command-exit", 0, "observed lifecycle command exit code")
+	commandExit := flags.Int("command-exit", 0, "observed command exit code")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -161,11 +163,13 @@ func runProfile(arguments []string, stdout, stderr io.Writer) int {
 	profile.Capture.NetworkMode = "unknown"
 	profile.Capture.SandboxProfile = "external-unverified"
 	profile.Capture.TraceIntegrity = "external-unverified"
+	profile.Capture.Phase = "external"
 	profile.Capture.Coverage = model.CaptureCoverage{
 		Scope: "external-strace", Completeness: "unverified", Lifecycle: []string{},
 		Limitations: []string{"The caller supplied this trace; capture conditions and coverage are not attested."},
 	}
 	profile.Behaviors = parsed.Behaviors
+	profile.Sequences = model.BuildObservationSequences(parsed.Behaviors)
 	model.AttachEvidence(&profile, raw, "external-unverified", "external-strace")
 	profile.Result = model.Result{Status: "complete", ExitCode: *commandExit}
 	if *commandExit != 0 {
@@ -371,13 +375,26 @@ func writeDiff(path, format string, diff model.Diff, stdout io.Writer) error {
 
 func renderText(diff model.Diff) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "BehaviorLock observed install lifecycle diff\n")
+	fmt.Fprintf(&builder, "BehaviorLock observed %s phase diff\n", safeText(diff.Phase))
 	fmt.Fprintf(&builder, "Package: %s\n", safeText(diff.Candidate.Name))
 	fmt.Fprintf(&builder, "Versions: %s to %s\n", safeText(diff.Baseline.Version), safeText(diff.Candidate.Version))
 	fmt.Fprintf(&builder, "Review required: %t\n", diff.Summary.ReviewRequired)
 	fmt.Fprintf(&builder, "Added: %d  Removed: %d  Highest review level: %s\n", diff.Summary.Added, diff.Summary.Removed, diff.Summary.HighestReviewLevel)
 	for _, change := range diff.Added {
-		fmt.Fprintf(&builder, "[%s] %s %s %s (%s) evidence=%s\n", strings.ToUpper(change.ReviewLevel), change.RuleID, safeText(change.Behavior.Type), safeText(change.Behavior.Target), safeText(change.Reason), evidenceLabel(change.Behavior))
+		technique := techniqueLabel(change.Techniques)
+		if technique != "" {
+			technique = " technique=\"" + technique + "\""
+		}
+		fmt.Fprintf(&builder, "[%s] %s %s %s (%s) evidence=%s%s\n", strings.ToUpper(change.ReviewLevel), change.RuleID, safeText(change.Behavior.Type), safeText(change.Behavior.Target), safeText(change.Reason), evidenceLabel(change.Behavior), technique)
+	}
+	for _, behavior := range diff.Removed {
+		fmt.Fprintf(&builder, "[REMOVED] %s %s evidence=%s\n", safeText(behavior.Type), safeText(behavior.Target), evidenceLabel(behavior))
+	}
+	for _, sequence := range diff.AddedSequences {
+		fmt.Fprintf(&builder, "[ADDED SEQUENCE] %s: %s\n", safeText(sequence.ID), safeText(strings.Join(sequence.BehaviorIDs, " -> ")))
+	}
+	for _, sequence := range diff.RemovedSequences {
+		fmt.Fprintf(&builder, "[REMOVED SEQUENCE] %s: %s\n", safeText(sequence.ID), safeText(strings.Join(sequence.BehaviorIDs, " -> ")))
 	}
 	for _, limitation := range diff.Limitations {
 		fmt.Fprintf(&builder, "Limitation: %s\n", safeText(limitation))
@@ -387,23 +404,54 @@ func renderText(diff model.Diff) string {
 
 func renderMarkdown(diff model.Diff) string {
 	var builder strings.Builder
-	builder.WriteString("# BehaviorLock observed install lifecycle diff\n\n")
+	fmt.Fprintf(&builder, "# BehaviorLock observed %s phase diff\n\n", markdown(diff.Phase))
 	fmt.Fprintf(&builder, "Package: %s\n\n", markdownCode(diff.Candidate.Name))
 	fmt.Fprintf(&builder, "Compared %s with %s. Review required: **%t**. Highest review level: **%s**.\n\n", markdownCode(diff.Baseline.Version), markdownCode(diff.Candidate.Version), diff.Summary.ReviewRequired, markdown(diff.Summary.HighestReviewLevel))
-	builder.WriteString("| Level | Rule | Behavior | Target | Evidence | Reason |\n")
-	builder.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	builder.WriteString("| Level | Rule | Behavior | Target | Evidence | Technique context | Reason |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, change := range diff.Added {
-		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s |\n", markdown(change.ReviewLevel), markdownCode(change.RuleID), markdownCode(change.Behavior.Type), markdownCode(change.Behavior.Target), markdownCode(evidenceLabel(change.Behavior)), markdown(change.Reason))
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s | %s |\n", markdown(change.ReviewLevel), markdownCode(change.RuleID), markdownCode(change.Behavior.Type), markdownCode(change.Behavior.Target), markdownCode(evidenceLabel(change.Behavior)), markdown(techniqueLabel(change.Techniques)), markdown(change.Reason))
 	}
 	if len(diff.Added) == 0 {
-		builder.WriteString("| none | none | none | none | none | No added observed behavior |\n")
+		builder.WriteString("| none | none | none | none | none | none | No added observed behavior |\n")
+	}
+	if len(diff.AddedSequences) > 0 {
+		builder.WriteString("\n## Added observed sequences\n\n")
+		for _, sequence := range diff.AddedSequences {
+			fmt.Fprintf(&builder, "* %s: %s\n", markdownCode(sequence.ID), markdownCode(strings.Join(sequence.BehaviorIDs, " -> ")))
+		}
+	}
+	if len(diff.Removed) > 0 {
+		builder.WriteString("\n## Removed observed behavior\n\n")
+		builder.WriteString("| Behavior | Target | Evidence |\n")
+		builder.WriteString("| --- | --- | --- |\n")
+		for _, behavior := range diff.Removed {
+			fmt.Fprintf(&builder, "| %s | %s | %s |\n", markdownCode(behavior.Type), markdownCode(behavior.Target), markdownCode(evidenceLabel(behavior)))
+		}
+	}
+	if len(diff.RemovedSequences) > 0 {
+		builder.WriteString("\n## Removed observed sequences\n\n")
+		for _, sequence := range diff.RemovedSequences {
+			fmt.Fprintf(&builder, "* %s: %s\n", markdownCode(sequence.ID), markdownCode(strings.Join(sequence.BehaviorIDs, " -> ")))
+		}
 	}
 	builder.WriteString("\n## Limitations\n\n")
 	for _, limitation := range diff.Limitations {
 		fmt.Fprintf(&builder, "* %s\n", markdown(limitation))
 	}
-	builder.WriteString("\nThis report compares behavior exercised during the selected npm install lifecycle. It does not classify malware or prove that either package version is safe.\n")
+	fmt.Fprintf(&builder, "\nThis report compares behavior exercised during the selected npm %s phase. It does not classify malware or prove that either package version is safe.\n", markdown(diff.Phase))
 	return builder.String()
+}
+
+func techniqueLabel(techniques []model.TechniqueRef) string {
+	if len(techniques) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(techniques))
+	for _, technique := range techniques {
+		labels = append(labels, fmt.Sprintf("%s %s %s", technique.Relationship, technique.Framework, technique.ID))
+	}
+	return strings.Join(labels, "; ")
 }
 
 func evidenceLabel(behavior model.Behavior) string {
@@ -448,11 +496,12 @@ func safeText(value string) string {
 }
 
 func printUsage(writer io.Writer) {
-	_, _ = io.WriteString(writer, `BehaviorLock compares observed npm install lifecycle behavior between exact package versions.
+	_, _ = io.WriteString(writer, `BehaviorLock compares observed npm behavior during compatible bounded phases between exact package versions.
 
 Usage:
   behaviorlock doctor
-  behaviorlock capture --experimental --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
+  behaviorlock capture --experimental --package name@1.2.3 --phase lifecycle --output profile.json [--evidence-output raw.strace]
+  behaviorlock capture --experimental --package name@1.2.3 --phase import --output import.json [--sinkhole]
   behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json [--evidence-output retained.strace]
   behaviorlock compare --baseline old.json --candidate new.json --output report.json [--baseline-evidence old.strace --candidate-evidence new.strace]
   behaviorlock compare --allow-external --baseline old.json --candidate new.json

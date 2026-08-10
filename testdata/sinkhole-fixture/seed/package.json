@@ -1,0 +1,8 @@
+{
+  "name": "behaviorlock-sinkhole-root",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "behaviorlock-sinkhole-fixture": "1.0.0"
+  }
+}

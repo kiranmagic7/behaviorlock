@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kiranmagic7/behaviorlock/internal/model"
 	"github.com/kiranmagic7/behaviorlock/internal/npm"
@@ -34,6 +35,8 @@ type Config struct {
 	Timeout     time.Duration
 	ToolVersion string
 	RunnerImage string
+	Phase       string
+	Sinkhole    bool
 }
 
 type PrepareMetadata struct {
@@ -41,6 +44,11 @@ type PrepareMetadata struct {
 	DependencyLockSHA256     string `json:"dependencyLockSha256"`
 	AcquisitionPolicyVersion string `json:"acquisitionPolicyVersion"`
 	AllowedAuthority         string `json:"allowedAuthority"`
+	ImportEntrypoint         string `json:"importEntrypoint"`
+	ImportModuleKind         string `json:"importModuleKind"`
+	ImportResolverVersion    string `json:"importResolverVersion"`
+	ImportSupport            string `json:"importSupport"`
+	ImportReason             string `json:"importReason"`
 }
 
 type RunnerMetadata struct {
@@ -129,6 +137,12 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if config.Timeout < 10*time.Second || config.Timeout > 10*time.Minute {
 		return model.Profile{}, nil, errors.New("capture timeout must be between 10 seconds and 10 minutes")
 	}
+	if config.Phase == "" {
+		config.Phase = "lifecycle"
+	}
+	if config.Phase != "lifecycle" && config.Phase != "import" {
+		return model.Profile{}, nil, errors.New("capture phase must be lifecycle or import")
+	}
 	runnerImage, err := normalizeRunnerImage(config.RunnerImage)
 	if err != nil {
 		return model.Profile{}, nil, err
@@ -141,6 +155,17 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	profile.Capture.RunnerImage = runnerImage
 	profile.Capture.SandboxProfile = SandboxProfile
 	profile.Capture.TraceIntegrity = "isolated-root-tracer"
+	profile.Capture.Phase = config.Phase
+	if config.Phase == "import" {
+		profile.Capture.Coverage = model.CaptureCoverage{
+			Scope: "registry-import-entrypoint", Lifecycle: []string{}, Completeness: "partial",
+			Limitations: []string{
+				"Only behavior exercised while loading the resolved package entry point is observed.",
+				"strace changes timing and can be detected by package code.",
+				"Environment variable reads are not observable unless a value becomes visible in an observed argument or path.",
+			},
+		}
+	}
 	profile.Capture.Experimental = true
 	if err := runner.checkDocker(captureContext); err != nil {
 		return withoutEvidence(timedOutProfile(profile, captureContext, err))
@@ -149,14 +174,20 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if err != nil {
 		return profile, nil, err
 	}
+	canaries, err := newCanarySet(rand.Reader)
+	if err != nil {
+		return profile, nil, err
+	}
+	profile.Capture.Canaries = canaryDescriptors(canaries)
 	prepContainer := "behaviorlock-prep-" + runID
 	traceContainer := "behaviorlock-trace-" + runID
 	proxyContainer := "behaviorlock-proxy-" + runID
+	sinkholeContainer := "behaviorlock-sinkhole-" + runID
 	temporaryImage := "behaviorlock-analysis:" + runID
 	egressNetwork := "behaviorlock-acq-egress-" + runID
 	proxyVolume := "behaviorlock-acq-socket-" + runID
 	defer runner.cleanup(cleanupTargets{
-		containers: []string{prepContainer, traceContainer, proxyContainer},
+		containers: []string{prepContainer, traceContainer, proxyContainer, sinkholeContainer},
 		images:     []string{temporaryImage},
 		volumes:    []string{proxyVolume},
 		networks:   []string{egressNetwork},
@@ -201,8 +232,22 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if err != nil {
 		return profile, nil, err
 	}
+	if metadata.ImportSupport == "supported" && !strings.HasPrefix(metadata.ImportEntrypoint, "$WORK/node_modules/"+spec.Name+"/") {
+		return profile, nil, errors.New("resolved import entry point is outside the selected package")
+	}
 	profile.Subject.RegistryIntegrity = metadata.Integrity
 	profile.Subject.DependencyLockSHA256 = metadata.DependencyLockSHA256
+	if config.Phase == "import" {
+		profile.Capture.Import = &model.ImportInfo{
+			Entrypoint: metadata.ImportEntrypoint, ModuleKind: metadata.ImportModuleKind,
+			ResolverVersion: metadata.ImportResolverVersion, Support: metadata.ImportSupport, Reason: metadata.ImportReason,
+		}
+		if metadata.ImportSupport != "supported" {
+			profile.Result = model.Result{Status: "unsupported", ExitCode: 2, Message: "the installed package entry point is unsupported for import observation"}
+			profile.Normalize()
+			return profile, nil, errors.New("package entry point is unsupported for import observation")
+		}
+	}
 	committed, err := runner.run(captureContext, []string{"commit", "--pause=true", prepContainer, temporaryImage}, 64<<10, 64<<10)
 	if err != nil || committed.ExitCode != 0 {
 		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("commit disposable preparation image: %s", safeDiagnostic(committed.Stderr))))
@@ -214,9 +259,18 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if err := runner.retireAcquisition(captureContext, prepContainer, proxyContainer, proxyVolume, egressNetwork); err != nil {
 		return profile, nil, err
 	}
+	traceNetwork := "none"
+	if config.Sinkhole {
+		if err := runner.startSinkhole(captureContext, sinkholeContainer, runnerImageID, canaries); err != nil {
+			return withoutEvidence(timedOutProfile(profile, captureContext, err))
+		}
+		traceNetwork = "container:" + sinkholeContainer
+		profile.Capture.NetworkMode = "sinkhole-loopback-v1"
+		profile.Capture.Sinkhole = &model.SinkholeInfo{Mode: "loopback-no-route", ResponderVersion: sinkholePolicy, CanaryIDs: []string{}}
+	}
 
 	started := time.Now()
-	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String()), maxTraceStream, 1<<20)
+	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String(), profile.Capture.Phase, traceNetwork, canaries), maxTraceStream, 1<<20)
 	duration := time.Since(started)
 	profile.Capture.DurationMillis = duration.Milliseconds()
 
@@ -226,21 +280,36 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 			inspectedState = &state
 		}
 	}
+	var sinkholeErr error
+	if config.Sinkhole {
+		info, auditErr := runner.readSinkholeAudit(sinkholeContainer, canaries)
+		if auditErr != nil {
+			sinkholeErr = auditErr
+		} else {
+			profile.Capture.Sinkhole = &info
+		}
+	}
 	if result, failure := classifyTraceFailure(captureContext.Err(), traced, runErr, inspectedState); failure != nil {
 		profile.Result = result
 		return profile, nil, failure
+	}
+	if sinkholeErr != nil {
+		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Message: "sinkhole audit could not be verified"}
+		return profile, nil, sinkholeErr
 	}
 	parsed, raw, commandExit, err := trace.ParseEnvelope(traced.Stdout)
 	if err != nil {
 		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Message: err.Error()}
 		return profile, nil, fmt.Errorf("parse trace envelope: %w", err)
 	}
+	applyCanaryObservations(parsed.Behaviors, canaries)
 	profile.Behaviors = parsed.Behaviors
+	profile.Sequences = model.BuildObservationSequences(parsed.Behaviors)
 	model.AttachEvidence(&profile, raw, "retained", "behaviorlock-trace-v1-payload")
 	profile.Result = model.Result{Status: "complete", ExitCode: commandExit}
 	if commandExit != 0 {
 		profile.Result.Status = "command_failed"
-		profile.Result.Message = "the selected lifecycle command returned a nonzero exit code"
+		profile.Result.Message = "the selected observation command returned a nonzero exit code"
 	}
 	profile.Normalize()
 	return profile, raw, nil
@@ -347,10 +416,13 @@ func buildProxyArgs(containerName, networkName, proxyVolume, runnerImageID strin
 	return append(arguments, runnerImageID, "proxy")
 }
 
-func buildTraceArgs(containerName, image, packageSpec string) []string {
+func buildTraceArgs(containerName, image, packageSpec, phase, networkMode string, canaries []canarySpec) []string {
+	if networkMode != "none" && !strings.HasPrefix(networkMode, "container:behaviorlock-sinkhole-") {
+		networkMode = "none"
+	}
 	arguments := []string{
 		"run", "--name", containerName,
-		"--network", "none",
+		"--network", networkMode,
 		"--read-only",
 		"--user", "0:0",
 		"--cap-drop", "ALL",
@@ -380,7 +452,13 @@ func buildTraceArgs(containerName, image, packageSpec string) []string {
 		"--env", "npm_config_update_notifier=false",
 	}
 	arguments = appendScrubbedProxyEnvironment(arguments)
-	return append(arguments, image, "trace", packageSpec)
+	sinkholeEnabled := "0"
+	if strings.HasPrefix(networkMode, "container:behaviorlock-sinkhole-") {
+		sinkholeEnabled = "1"
+	}
+	arguments = append(arguments, "--env", "BEHAVIORLOCK_SINKHOLE_ENABLED="+sinkholeEnabled)
+	arguments = appendCanaryEnvironment(arguments, canaries)
+	return append(arguments, image, "trace", packageSpec, phase)
 }
 
 func appendScrubbedProxyEnvironment(arguments []string) []string {
@@ -616,9 +694,33 @@ func parsePrepareMetadata(output []byte) (PrepareMetadata, error) {
 		if metadata.AcquisitionPolicyVersion != AcquisitionPolicy || metadata.AllowedAuthority != AcquisitionAuthority {
 			return PrepareMetadata{}, errors.New("preparation acquisition policy marker is missing or invalid")
 		}
+		if metadata.ImportResolverVersion != "node-resolve-v1" {
+			return PrepareMetadata{}, errors.New("preparation import resolver marker is missing or invalid")
+		}
+		if metadata.ImportSupport == "supported" {
+			if !validPrepareText(metadata.ImportEntrypoint, 4096) || !strings.HasPrefix(metadata.ImportEntrypoint, "$WORK/node_modules/") ||
+				strings.Contains(metadata.ImportEntrypoint, "/../") || (metadata.ImportModuleKind != "commonjs" && metadata.ImportModuleKind != "esm") || metadata.ImportReason != "" {
+				return PrepareMetadata{}, errors.New("preparation import plan is inconsistent")
+			}
+		} else if metadata.ImportSupport != "unsupported" || metadata.ImportModuleKind != "unsupported" ||
+			(metadata.ImportReason != "entrypoint-unresolved" && metadata.ImportReason != "unsupported-extension") {
+			return PrepareMetadata{}, errors.New("preparation unsupported import plan is invalid")
+		}
 		return metadata, nil
 	}
 	return PrepareMetadata{}, errors.New("preparation metadata marker is missing")
+}
+
+func validPrepareText(value string, limit int) bool {
+	if value == "" || len(value) > limit || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func timedOutProfile(profile model.Profile, ctx context.Context, cause error) (model.Profile, error) {

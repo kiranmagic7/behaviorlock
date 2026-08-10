@@ -41,7 +41,7 @@ jobs:
       - name: Validate workflows and JSON contracts
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json
+          jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json testdata/sinkhole-fixture/seed/*.json testdata/sinkhole-fixture/seed/node_modules/behaviorlock-sinkhole-fixture/*.json
 
   test:
     name: Test (${{ matrix.os }})

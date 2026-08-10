@@ -3,6 +3,7 @@ set -eu
 
 mode="${1:-}"
 package_spec="${2:-}"
+phase="${3:-lifecycle}"
 
 case "$mode" in
   prepare)
@@ -47,25 +48,44 @@ case "$mode" in
       echo "trace supervisor must run as uid 0" >&2
       exit 70
     fi
+    case "${BEHAVIORLOCK_SINKHOLE_ENABLED:-0}" in
+      0) ;;
+      1)
+        printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /etc/resolv.conf || {
+          echo "sinkhole resolver configuration failed" >&2
+          exit 74
+        }
+        ;;
+      *) echo "invalid sinkhole selection" >&2; exit 64 ;;
+    esac
     su -s /bin/sh scanner -c 'cp -a /seed/. /work/'
-    # The child shell must expand HOME after su changes identity.
+    : "${BEHAVIORLOCK_CANARY_SSH:?missing ssh canary}"
+    : "${BEHAVIORLOCK_CANARY_AWS_FILE:?missing aws file canary}"
+    : "${BEHAVIORLOCK_CANARY_DOCKER:?missing docker canary}"
+    : "${BEHAVIORLOCK_CANARY_NPM_FILE:?missing npm canary}"
+    # The child shell expands HOME and the canary variables after su changes identity.
     # shellcheck disable=SC2016
     su -s /bin/sh scanner -c '
       mkdir -p "$HOME/.ssh" "$HOME/.aws" "$HOME/.docker" "$HOME/.config/gcloud" "$HOME/.npm"
-      printf "BEHAVIORLOCK_CANARY_DO_NOT_USE\n" > "$HOME/.ssh/id_rsa"
-      printf "BEHAVIORLOCK_CANARY_DO_NOT_USE\n" > "$HOME/.aws/credentials"
-      printf "{\"auths\":{\"canary.invalid\":{\"auth\":\"BEHAVIORLOCK_CANARY\"}}}\n" > "$HOME/.docker/config.json"
-      printf "//registry.npmjs.org/:_authToken=BEHAVIORLOCK_CANARY\n" > "$HOME/.npmrc"
+      printf "%s\n" "$BEHAVIORLOCK_CANARY_SSH" > "$HOME/.ssh/id_rsa"
+      printf "[default]\naws_access_key_id=%s\n" "$BEHAVIORLOCK_CANARY_AWS_FILE" > "$HOME/.aws/credentials"
+      printf "{\"auths\":{\"canary.invalid\":{\"auth\":\"%s\"}}}\n" "$BEHAVIORLOCK_CANARY_DOCKER" > "$HOME/.docker/config.json"
+      printf "//registry.npmjs.org/:_authToken=%s\n" "$BEHAVIORLOCK_CANARY_NPM_FILE" > "$HOME/.npmrc"
       chmod 0400 "$HOME/.ssh/id_rsa" "$HOME/.aws/credentials" "$HOME/.docker/config.json" "$HOME/.npmrc"
     '
+    case "$phase" in
+      lifecycle) phase_script=/opt/behaviorlock/lifecycle.sh ;;
+      import) phase_script=/opt/behaviorlock/import.sh ;;
+      *) echo "unsupported capture phase" >&2; exit 64 ;;
+    esac
     set +e
     # The traced child shell expands its positional argument.
     # shellcheck disable=SC2016
     strace -u scanner -ff -qq -ttt -s 4096 -yy \
       -e trace=%file,%process,%network,ftruncate,mmap,getdents,getdents64,memfd_create,ptrace,clock_gettime,clock_getres,gettimeofday,time,nanosleep,clock_nanosleep,dup,dup2,dup3,fcntl,close \
       -o /trace/raw \
-      -- /bin/sh -c 'exec /opt/behaviorlock/lifecycle.sh "$1" > /tmp/package-output.log 2>&1' \
-      behaviorlock-lifecycle "$package_spec" \
+      -- /bin/sh -c 'exec "$1" "$2" > /tmp/package-output.log 2>&1' \
+      behaviorlock-phase "$phase_script" "$package_spec" \
       2> /tmp/strace-error.log
     command_exit=$?
     set -e
@@ -148,12 +168,27 @@ case "$mode" in
       --no-new-privs \
       node /opt/behaviorlock/proxy.mjs
     ;;
+  sinkhole)
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "sinkhole supervisor must start as uid 0" >&2
+      exit 70
+    fi
+    exec setpriv \
+      --reuid=65532 \
+      --regid=65532 \
+      --clear-groups \
+      --inh-caps=+net_bind_service \
+      --ambient-caps=+net_bind_service \
+      --bounding-set=+net_bind_service \
+      --no-new-privs \
+      node /opt/behaviorlock/sinkhole.mjs
+    ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \
       "$(node --version)" "$(npm --version)" "$(strace --version | sed -n '1s/^strace -- version //p')"
     ;;
   *)
-    echo "usage: entrypoint.sh prepare|trace|proxy|version package@version" >&2
+    echo "usage: entrypoint.sh prepare|trace|proxy|sinkhole|version package@version [lifecycle|import]" >&2
     exit 64
     ;;
 esac

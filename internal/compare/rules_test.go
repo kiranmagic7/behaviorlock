@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -19,10 +20,11 @@ func TestVersionedRuleRegistryHasUniqueStableIdentifiers(t *testing.T) {
 	var registry struct {
 		SchemaVersion int `json:"schemaVersion"`
 		Rules         []struct {
-			ID          string `json:"id"`
-			ReviewLevel string `json:"reviewLevel"`
-			Family      string `json:"family"`
-			Description string `json:"description"`
+			ID          string               `json:"id"`
+			ReviewLevel string               `json:"reviewLevel"`
+			Family      string               `json:"family"`
+			Description string               `json:"description"`
+			Techniques  []model.TechniqueRef `json:"techniques"`
 		} `json:"rules"`
 	}
 	if err := json.Unmarshal(raw, &registry); err != nil {
@@ -41,6 +43,14 @@ func TestVersionedRuleRegistryHasUniqueStableIdentifiers(t *testing.T) {
 			t.Fatalf("invalid review level for %s", rule.ID)
 		}
 		seen[rule.ID] = rule.ReviewLevel
+		for _, technique := range rule.Techniques {
+			if technique.Framework != "MITRE ATT&CK" || technique.Relationship != "consistent with" || !regexp.MustCompile(`^T[0-9]{4}(\.[0-9]{3})?$`).MatchString(technique.ID) {
+				t.Fatalf("rule %s has invalid optional technique context: %#v", rule.ID, technique)
+			}
+		}
+		if !reflect.DeepEqual(rule.Techniques, techniquesForRule(rule.ID)) {
+			t.Fatalf("rule %s runtime technique context drifted from the registry: registry=%#v runtime=%#v", rule.ID, rule.Techniques, techniquesForRule(rule.ID))
+		}
 	}
 	if seen["BL500"] == "" || seen["BL600"] == "" {
 		t.Fatal("ordinary reads and environment fingerprints lost their established identifiers")

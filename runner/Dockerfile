@@ -10,9 +10,13 @@ RUN apt-get update \
 
 COPY --chmod=0555 entrypoint.sh /opt/behaviorlock/entrypoint.sh
 COPY --chmod=0555 lifecycle.sh /opt/behaviorlock/lifecycle.sh
+COPY --chmod=0555 import.sh /opt/behaviorlock/import.sh
+COPY --chmod=0444 import.mjs /opt/behaviorlock/import.mjs
 COPY --chmod=0444 metadata.mjs /opt/behaviorlock/metadata.mjs
+COPY --chmod=0444 module-kind.mjs /opt/behaviorlock/module-kind.mjs
 COPY --chmod=0444 proxy.mjs /opt/behaviorlock/proxy.mjs
 COPY --chmod=0444 proxy-relay.mjs /opt/behaviorlock/proxy-relay.mjs
+COPY --chmod=0444 sinkhole.mjs /opt/behaviorlock/sinkhole.mjs
 COPY --chmod=0444 sentinel-start sentinel-end /opt/behaviorlock/
 
 ENTRYPOINT ["/opt/behaviorlock/entrypoint.sh"]

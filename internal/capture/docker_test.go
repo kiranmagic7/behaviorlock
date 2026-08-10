@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -16,16 +17,17 @@ const (
 	testRunnerImageID     = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testPreparedImageID   = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testRegistryIntegrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
-	testPrepareOutput     = "BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"acquisitionPolicyVersion\":\"npm-registry-connect-v1\",\"allowedAuthority\":\"registry.npmjs.org:443\"}\n"
+	testPrepareOutput     = "BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"acquisitionPolicyVersion\":\"npm-registry-connect-v1\",\"allowedAuthority\":\"registry.npmjs.org:443\",\"importEntrypoint\":\"$WORK/node_modules/example/index.js\",\"importModuleKind\":\"commonjs\",\"importResolverVersion\":\"node-resolve-v1\",\"importSupport\":\"supported\",\"importReason\":\"\"}\n"
 	testProxyOutput       = "BEHAVIORLOCK_PROXY_READY_V1 npm-registry-connect-v1 registry.npmjs.org:443\nBEHAVIORLOCK_PROXY_V1 {\"decision\":\"allow\",\"reason\":\"npm-registry-connect-v1\",\"authority\":\"registry.npmjs.org:443\"}\n"
 )
 
 func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 	t.Parallel()
 	packageSpec := "safe-package@1.2.3"
-	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, packageSpec)
-	if arguments[len(arguments)-1] != packageSpec || arguments[len(arguments)-2] != "trace" {
-		t.Fatalf("unexpected trailing arguments: %q", arguments[len(arguments)-3:])
+	canaries := deterministicCanaries(t)
+	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, packageSpec, "lifecycle", "none", canaries)
+	if arguments[len(arguments)-1] != "lifecycle" || arguments[len(arguments)-2] != packageSpec || arguments[len(arguments)-3] != "trace" {
+		t.Fatalf("unexpected trailing arguments: %q", arguments[len(arguments)-4:])
 	}
 	for _, forbidden := range []string{"--privileged", "seccomp=unconfined", "--pid", "host", "/var/run/docker.sock"} {
 		if slices.Contains(arguments, forbidden) {
@@ -39,6 +41,40 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 		}
 	}
 	assertProxyEnvironmentScrubbed(t, arguments)
+	if !strings.Contains(joined, "--env BEHAVIORLOCK_CANARY_SSH=") || !strings.Contains(joined, "--env AWS_SECRET_ACCESS_KEY=") {
+		t.Fatalf("trace arguments are missing generated canaries: %q", arguments)
+	}
+	if !strings.Contains(joined, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=0") {
+		t.Fatalf("offline trace arguments do not make sinkhole state explicit: %q", arguments)
+	}
+}
+
+func TestTraceArgumentsEnableOnlyGeneratedSinkholeNamespace(t *testing.T) {
+	t.Parallel()
+	canaries := deterministicCanaries(t)
+	arguments := buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:behaviorlock-sinkhole-abc", canaries)
+	joined := strings.Join(arguments, " ")
+	if !strings.Contains(joined, "--network container:behaviorlock-sinkhole-abc") || !strings.Contains(joined, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=1") {
+		t.Fatalf("sinkhole namespace was not enabled explicitly: %q", arguments)
+	}
+
+	invalid := strings.Join(buildTraceArgs("behaviorlock-trace-abc", testPreparedImageID, "safe-package@1.2.3", "import", "container:attacker", canaries), " ")
+	if !strings.Contains(invalid, "--network none") || !strings.Contains(invalid, "--env BEHAVIORLOCK_SINKHOLE_ENABLED=0") {
+		t.Fatalf("untrusted network namespace was not rejected: %q", invalid)
+	}
+}
+
+func deterministicCanaries(t *testing.T) []canarySpec {
+	t.Helper()
+	raw := make([]byte, 16*len(canaryTemplates))
+	for index := range raw {
+		raw[index] = byte(index)
+	}
+	canaries, err := newCanarySet(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canaries
 }
 
 func TestPrepareArgumentsNeverMountHostPaths(t *testing.T) {
@@ -172,7 +208,7 @@ func TestInspectContainerStateRequiresValidDockerState(t *testing.T) {
 
 func TestParsePrepareMetadata(t *testing.T) {
 	t.Parallel()
-	metadata, err := parsePrepareMetadata([]byte("noise\nBEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"acquisitionPolicyVersion\":\"npm-registry-connect-v1\",\"allowedAuthority\":\"registry.npmjs.org:443\"}\n"))
+	metadata, err := parsePrepareMetadata([]byte("noise\n" + testPrepareOutput))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +278,7 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 				}
 				return commandResult{Stdout: []byte("{\"node\":\"v22.1.0\",\"npm\":\"10.8.0\",\"strace\":\"6.1\"}\n")}, nil
 			}
-			if arguments[len(arguments)-3] != testPreparedImageID {
+			if arguments[len(arguments)-4] != testPreparedImageID {
 				t.Fatalf("trace used mutable preparation image reference: %q", arguments)
 			}
 			return commandResult{Stdout: []byte("BEHAVIORLOCK_TRACE_V1\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-start\", O_RDONLY) = 3\nexecve(\"/bin/true\", [\"true\"], 0x0) = 0\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-end\", O_RDONLY) = 3\nBEHAVIORLOCK_TRACE_END exit=0\n")}, nil
