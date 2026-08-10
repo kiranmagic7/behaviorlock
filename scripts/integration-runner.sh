@@ -100,7 +100,7 @@ run_resource_trace_container() {
     # trusted tracer can retain the evidence needed to prove the boundary.
     file) ;;
     output) temporary_size=4m ;;
-    syscall) trace_size=8m ;;
+    syscall) trace_size=4m ;;
     timeout) ;;
     *) echo "unknown resource trace mode: $fixture_mode" >&2; return 64 ;;
   esac
@@ -489,12 +489,17 @@ for fixture_mode in process descriptor tmpfs file output syscall; do
   run_resource_trace_container "$fixture_mode" "$resource_container" > "$resource_output" 2> "$resource_error"
   resource_exit=$?
   set -e
-  if [ "$resource_exit" -eq 124 ]; then
-    echo "$fixture_mode resource fixture exceeded its hard wall clock" >&2
+  resource_running="$(docker inspect --format '{{.State.Running}}' "$resource_container")"
+  if [ "$resource_running" != false ]; then
+    remove_resource_container "$resource_container"
+    echo "$fixture_mode resource fixture required forced cleanup after its hard wall clock" >&2
+    tail -120 "$resource_error" >&2 || true
     exit 1
   fi
-  if [ "$(docker inspect --format '{{.State.Running}}' "$resource_container")" != false ]; then
-    echo "$fixture_mode resource fixture left a running tracee" >&2
+  if [ "$resource_exit" -eq 124 ]; then
+    remove_resource_container "$resource_container"
+    echo "$fixture_mode resource fixture exceeded its hard wall clock" >&2
+    tail -120 "$resource_error" >&2 || true
     exit 1
   fi
   case "$fixture_mode" in
