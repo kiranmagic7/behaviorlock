@@ -29,6 +29,7 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 | Evidence integrity | Raw trace retained separately and verified by digest and line references |
 | Acquisition egress | Preparation has `--network none`; an exact-host proxy is reached through a private Unix socket |
 | Profile authenticity | Ordinary profiles are unsigned; a protected, disabled-by-default attestation workflow exists for reviewed fixtures |
+| Dependency review automation | Split-privilege workflows implemented; inactive until reviewed and merged to the protected default branch |
 | Tagged release | None |
 
 ## What it observes
@@ -227,12 +228,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 7. [Review rules](docs/RULES.md) defines the versioned rule registry, precedence, and attribution boundaries.
 8. [Resource boundaries and repeatability](docs/RESOURCE_AND_REPEATABILITY.md) defines exhaustion outcomes, cleanup, and the ten-run semantic stability gate.
 9. [Canary, import, and sinkhole observations](docs/CANARY_IMPORT_AND_SINKHOLE.md) defines the optional observation modes and their privacy boundary.
-10. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-11. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-12. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-13. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-14. [Roadmap](ROADMAP.md) contains the release gates.
-15. [Security policy](SECURITY.md) explains private vulnerability reporting.
+10. [Split-privilege dependency review automation](docs/DEPENDENCY_REVIEW_AUTOMATION.md) defines the unprivileged capture and privileged comment boundary.
+11. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+12. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+13. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+14. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+15. [Roadmap](ROADMAP.md) contains the release gates.
+16. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 

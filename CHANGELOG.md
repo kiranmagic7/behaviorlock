@@ -34,6 +34,7 @@ All notable changes will be documented here. The project follows Keep a Changelo
 26. Explicit CommonJS or ESM entry-point import observation with unsupported outcomes
 27. Optional no-route loopback sinkhole with fixed DNS, HTTP, and TCP responses
 28. Schema v3 contracts for phase, canary, sequence, import, sinkhole, and optional ATT&CK context metadata
+29. Split-privilege dependency-review automation with API-only head manifest extraction, independently validated data artifacts, and sanitized sticky comments
 
 ### Changed
 
@@ -63,3 +64,4 @@ All notable changes will be documented here. The project follows Keep a Changelo
 12. Release and attestation workflows are manual, SHA-pinned, least-privilege, protected-environment gated, and disabled by repository variables by default.
 13. Generated canary values are never copied from the host or stored in normalized profile metadata.
 14. The optional sinkhole has no routed network, retains only bounded request counts and matching canary identifiers, and discards request bytes.
+15. Dependency review rejects `pull_request_target`, pull-request head checkout, contributor-supplied profiles, artifact Markdown, unpinned actions, and any execution in the comment-privileged workflow.

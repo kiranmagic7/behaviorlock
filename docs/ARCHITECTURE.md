@@ -45,6 +45,8 @@ Two complete profiles for the same package, phase, and equivalent runner environ
 
 Ordinary profiles declare `attestation: none`. Environment fields and retained evidence allow consistency and comparability checks but are not authenticated. The protected trusted-profile workflow can package two reviewed profiles and their evidence into one GitHub-attested bundle. Verification binds that bundle to its repository, workflow, protected source commit, hosted runner, runner image, and acquisition policy before cross-workflow use. It does not upgrade arbitrary profiles or contributor artifacts into trusted evidence.
 
+Dependency review uses a different, lower-trust path. A `pull_request` job with a read-only token checks out only the trusted base, reads both manifests through the GitHub API, and captures exact public-registry versions itself. A separate default-branch `workflow_run` job holds comment permission, never executes the downloaded artifact, independently verifies every identity and evidence boundary, and regenerates sanitized Markdown. These artifacts remain untrusted review inputs and can never satisfy the protected trusted-profile or release proof gates.
+
 The report summary is:
 
 1. No added behavior or sequence: `reviewRequired: false` and `highestReviewLevel: none`

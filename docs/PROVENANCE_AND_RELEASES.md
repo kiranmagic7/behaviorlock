@@ -20,6 +20,8 @@ The workflow creates both profiles in one job, retains their mode `0600` raw evi
 
 The verifier checks the archive's exact file set before extraction, all internal checksums, both profile/evidence pairs, the recomputed report, the allowlisted package pair, runner and acquisition fingerprints, source repository, source ref, source commit, signer workflow, and GitHub-hosted runner claim. Contributor-supplied profiles or bundles are not trusted simply because they pass structural validation.
 
+The dependency-review artifact is deliberately separate from a trusted profile bundle. Its unprivileged producer has no write token, and the privileged comment workflow revalidates its contents as hostile data. That is sufficient for a bounded review comment, not for policy enforcement, a release proof, or provenance attestation. Pull-request review artifacts never satisfy gate 14.
+
 Example verification inside a protected workflow:
 
 ```bash

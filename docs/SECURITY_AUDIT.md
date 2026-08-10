@@ -18,6 +18,8 @@ The expanded observation work was implemented after this reviewed base. It adds 
 
 The schema v3 phase, canary, sequence, import, and inert-sinkhole work was implemented after this reviewed base. Its generated values are nonsecret, its sinkhole has no routed network, and its local tests use inert fixtures. Those facts do not inherit this audit decision; hosted no-route and payload-discard evidence plus a new maintainer security review are required before any release gate can rely on the work.
 
+The split-privilege dependency-review workflows were implemented after this reviewed base. Local tests reject adversarial manifest sources, workflow permission drift, unpinned actions, artifact identity mismatch, evidence tampering, unexpected files, and unsafe Markdown. The privileged `workflow_run` path exists only on the default branch, so feature-branch checks cannot establish its hosted execution proof. This work does not inherit the audit decision and is not release authority.
+
 ## Method
 
 The review combined:

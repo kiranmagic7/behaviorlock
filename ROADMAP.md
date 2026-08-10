@@ -36,6 +36,8 @@ Gates 8, 10, and 12 have a feature-branch implementation for real tracer death, 
 
 The phase, canary, sequence, and inert-sinkhole work has a feature-branch implementation under schema v3. It remains experimental until its hosted no-route, inert-stage, payload-discard, canary-redaction, import-resolution, and cleanup checks pass on the reviewed commit. These features do not close any release gate by their existence.
 
+Split-privilege dependency-review automation has a feature-branch implementation. The capture job is read-only and never checks out pull-request head code; the separate comment job treats artifacts only as data and independently revalidates them. It remains inactive until protected-default-branch review and cannot supply release or trusted-profile proof.
+
 The release workflow remains disabled by default. It queries fresh GitHub check evidence for the exact protected commit and rejects missing, skipped, stale, duplicated, or failed gate proofs. No release tag, draft, container image, or public artifact is created merely because the workflow files exist.
 
 ## Later options

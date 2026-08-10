@@ -58,9 +58,9 @@ Package code can still detect tracing, alter its own behavior, attack the shared
 
 ### CI compromise
 
-Pull request workflows use GitHub hosted runners, read only repository permissions, no secrets, and the `pull_request` event. `pull_request_target` and self hosted runners are prohibited for untrusted contribution code.
+Pull request workflows use GitHub hosted runners, read only repository permissions, no secrets, and the `pull_request` event. `pull_request_target` and self hosted runners are prohibited for untrusted contribution code. Dependency review checks out only the exact trusted base revision and obtains head manifests as bounded JSON through GitHub's API; it never checks out or executes repository-head code.
 
-Profile JSON and its raw evidence companion are not signed. A contributor can forge both artifacts and their provenance fields together. The current validator proves that the pair agrees by checking the whole artifact digest and each exact line reference; it does not authenticate the producer. A policy workflow must capture both versions itself after checkout, must not trust profiles or evidence from the pull request, and must keep its workflow definition under code owner review.
+Profile JSON and its raw evidence companion are not signed. A contributor can forge both artifacts and their provenance fields together. The current validator proves that the pair agrees by checking the whole artifact digest and each exact line reference; it does not authenticate the producer. The split-privilege review workflow captures both registry versions itself in a read-only-token job. A separate default-branch `workflow_run` job may comment only after independently checking the workflow source, run, GitHub artifact identity, exact file set, package pair, profiles, evidence, runner, acquisition policy, and recomputed diff. It treats downloaded files only as data and never executes them. This review comment is not trusted-profile or release authority.
 
 ## Residual risk
 
