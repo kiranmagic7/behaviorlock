@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:behaviorlock:schema:release-gate-report:1",
+  "title": "BehaviorLock release gate status report",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "repository", "sourceSha", "evidenceGeneratedAt", "assessedAt", "maxAgeHours", "gatesExpected", "gatesSatisfied", "allGatesSatisfied", "issues", "gates"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "behaviorlock.release-gate.report" },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "evidenceGeneratedAt": { "type": "string", "format": "date-time" },
+    "assessedAt": { "type": "string", "format": "date-time" },
+    "maxAgeHours": { "type": "integer", "minimum": 1, "maximum": 168 },
+    "gatesExpected": { "const": 14 },
+    "gatesSatisfied": { "type": "integer", "minimum": 0, "maximum": 14 },
+    "allGatesSatisfied": { "type": "boolean" },
+    "issues": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+    "gates": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "items": {
+        "type": "object",
+        "required": ["id", "check", "description", "satisfied", "status", "conclusion", "completedAt"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^gate-(0[1-9]|1[0-4])$" },
+          "check": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "satisfied": { "type": "boolean" },
+          "status": { "type": "string", "maxLength": 64 },
+          "conclusion": { "type": "string", "maxLength": 64 },
+          "completedAt": { "type": "string", "format": "date-time" },
+          "detailsUrl": { "type": "string", "maxLength": 2048 },
+          "reason": { "type": "string", "maxLength": 1024 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

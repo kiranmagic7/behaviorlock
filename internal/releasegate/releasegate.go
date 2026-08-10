@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -42,6 +43,33 @@ type ObservedProof struct {
 	DetailsURL  string    `json:"detailsUrl"`
 }
 
+type Report struct {
+	SchemaVersion     int          `json:"schemaVersion"`
+	Kind              string       `json:"kind"`
+	Repository        string       `json:"repository"`
+	SourceSHA         string       `json:"sourceSha"`
+	EvidenceGenerated time.Time    `json:"evidenceGeneratedAt"`
+	AssessedAt        time.Time    `json:"assessedAt"`
+	MaxAgeHours       int          `json:"maxAgeHours"`
+	GatesExpected     int          `json:"gatesExpected"`
+	GatesSatisfied    int          `json:"gatesSatisfied"`
+	AllGatesSatisfied bool         `json:"allGatesSatisfied"`
+	Issues            []string     `json:"issues"`
+	Gates             []GateResult `json:"gates"`
+}
+
+type GateResult struct {
+	ID          string    `json:"id"`
+	Check       string    `json:"check"`
+	Description string    `json:"description"`
+	Satisfied   bool      `json:"satisfied"`
+	Status      string    `json:"status"`
+	Conclusion  string    `json:"conclusion"`
+	CompletedAt time.Time `json:"completedAt"`
+	DetailsURL  string    `json:"detailsUrl,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+}
+
 func Load(configPath, evidencePath string) (Config, Evidence, error) {
 	var config Config
 	if err := decodeStrict(configPath, &config); err != nil {
@@ -55,71 +83,127 @@ func Load(configPath, evidencePath string) (Config, Evidence, error) {
 }
 
 func Verify(config Config, evidence Evidence, repository, sourceSHA string, now time.Time) error {
+	report, err := Assess(config, evidence, repository, sourceSHA, now)
+	if err != nil {
+		return err
+	}
+	if report.AllGatesSatisfied {
+		return nil
+	}
+	if len(report.Issues) > 0 {
+		return errors.New(report.Issues[0])
+	}
+	for _, gate := range report.Gates {
+		if !gate.Satisfied {
+			return fmt.Errorf("proof %s %s", gate.ID, gate.Reason)
+		}
+	}
+	return errors.New("release proofs are incomplete")
+}
+
+func Assess(config Config, evidence Evidence, repository, sourceSHA string, now time.Time) (Report, error) {
 	if config.SchemaVersion != 1 || evidence.SchemaVersion != 1 {
-		return errors.New("unsupported release proof schema version")
+		return Report{}, errors.New("unsupported release proof schema version")
 	}
 	if len(config.Proofs) != 14 {
-		return fmt.Errorf("release proof configuration must define exactly 14 gates, found %d", len(config.Proofs))
+		return Report{}, fmt.Errorf("release proof configuration must define exactly 14 gates, found %d", len(config.Proofs))
 	}
 	if config.MaxAgeHours < 1 || config.MaxAgeHours > 168 {
-		return errors.New("release proof maxAgeHours must be between 1 and 168")
+		return Report{}, errors.New("release proof maxAgeHours must be between 1 and 168")
 	}
 	if !validRepository(repository) || !validSHA(sourceSHA) {
-		return errors.New("expected repository or source SHA is invalid")
-	}
-	if evidence.Repository != repository || evidence.SourceSHA != sourceSHA {
-		return errors.New("release proof evidence does not describe the expected repository and source SHA")
-	}
-	maxAge := time.Duration(config.MaxAgeHours) * time.Hour
-	if err := fresh("evidence manifest", evidence.GeneratedAt, now, maxAge); err != nil {
-		return err
+		return Report{}, errors.New("expected repository or source SHA is invalid")
 	}
 
 	required := make(map[string]RequiredProof, len(config.Proofs))
 	checks := make(map[string]struct{}, len(config.Proofs))
 	for _, proof := range config.Proofs {
 		if proof.ID == "" || proof.Check == "" || proof.Description == "" {
-			return errors.New("release proof configuration contains an incomplete gate")
+			return Report{}, errors.New("release proof configuration contains an incomplete gate")
 		}
 		if _, exists := required[proof.ID]; exists {
-			return fmt.Errorf("duplicate required proof %s", proof.ID)
+			return Report{}, fmt.Errorf("duplicate required proof %s", proof.ID)
 		}
 		if _, exists := checks[proof.Check]; exists {
-			return fmt.Errorf("duplicate required check %s", proof.Check)
+			return Report{}, fmt.Errorf("duplicate required check %s", proof.Check)
 		}
 		required[proof.ID] = proof
 		checks[proof.Check] = struct{}{}
 	}
 
+	report := Report{
+		SchemaVersion:     1,
+		Kind:              "behaviorlock.release-gate.report",
+		Repository:        repository,
+		SourceSHA:         sourceSHA,
+		EvidenceGenerated: evidence.GeneratedAt,
+		AssessedAt:        now.UTC(),
+		MaxAgeHours:       config.MaxAgeHours,
+		GatesExpected:     len(config.Proofs),
+		Issues:            []string{},
+		Gates:             make([]GateResult, 0, len(config.Proofs)),
+	}
+	maxAge := time.Duration(config.MaxAgeHours) * time.Hour
+	if evidence.Repository != repository || evidence.SourceSHA != sourceSHA {
+		report.Issues = append(report.Issues, "release proof evidence does not describe the expected repository and source SHA")
+	}
+	if err := fresh("evidence manifest", evidence.GeneratedAt, now, maxAge); err != nil {
+		report.Issues = append(report.Issues, err.Error())
+	}
+
 	observed := make(map[string]ObservedProof, len(evidence.Proofs))
 	for _, proof := range evidence.Proofs {
 		if _, exists := observed[proof.ID]; exists {
-			return fmt.Errorf("duplicate observed proof %s", proof.ID)
+			report.Issues = append(report.Issues, fmt.Sprintf("duplicate observed proof %s", proof.ID))
+			continue
 		}
 		observed[proof.ID] = proof
 	}
-	for id, expectation := range required {
+	for _, expectation := range config.Proofs {
+		id := expectation.ID
+		result := GateResult{ID: id, Check: expectation.Check, Description: expectation.Description}
 		proof, exists := observed[id]
 		if !exists {
-			return fmt.Errorf("required proof %s is missing", id)
+			result.Status = "missing"
+			result.Conclusion = "missing"
+			result.Reason = "is missing"
+			report.Gates = append(report.Gates, result)
+			continue
 		}
-		if proof.Check != expectation.Check || proof.SourceSHA != sourceSHA {
-			return fmt.Errorf("proof %s does not match its required check and source SHA", id)
+		result.Status = proof.Status
+		result.Conclusion = proof.Conclusion
+		result.CompletedAt = proof.CompletedAt
+		result.DetailsURL = proof.DetailsURL
+		switch {
+		case proof.Check != expectation.Check || proof.SourceSHA != sourceSHA:
+			result.Reason = "does not match its required check and source SHA"
+		case proof.Status != "completed" || proof.Conclusion != "success":
+			result.Reason = fmt.Sprintf("did not complete successfully: status=%s conclusion=%s", proof.Status, proof.Conclusion)
+		case fresh("proof "+id, proof.CompletedAt, now, maxAge) != nil:
+			result.Reason = freshReason(id, proof.CompletedAt, now, maxAge)
+		case !trustedDetailsURL(proof.DetailsURL, repository):
+			result.Reason = "has an untrusted details URL"
+		default:
+			result.Satisfied = true
+			report.GatesSatisfied++
 		}
-		if proof.Status != "completed" || proof.Conclusion != "success" {
-			return fmt.Errorf("proof %s did not complete successfully: status=%s conclusion=%s", id, proof.Status, proof.Conclusion)
-		}
-		if err := fresh("proof "+id, proof.CompletedAt, now, maxAge); err != nil {
-			return err
-		}
-		if !trustedDetailsURL(proof.DetailsURL, repository) {
-			return fmt.Errorf("proof %s has an untrusted details URL", id)
+		report.Gates = append(report.Gates, result)
+	}
+	for id := range observed {
+		if _, exists := required[id]; !exists {
+			report.Issues = append(report.Issues, fmt.Sprintf("release proof evidence contains unexpected gate %s", id))
 		}
 	}
-	if len(observed) != len(required) {
-		return errors.New("release proof evidence contains unexpected gates")
+	sort.Strings(report.Issues)
+	report.AllGatesSatisfied = report.GatesSatisfied == report.GatesExpected && len(report.Issues) == 0
+	return report, nil
+}
+
+func freshReason(id string, completedAt, now time.Time, maxAge time.Duration) string {
+	if err := fresh("proof "+id, completedAt, now, maxAge); err != nil {
+		return strings.TrimPrefix(err.Error(), "proof "+id+" ")
 	}
-	return nil
+	return "has invalid freshness evidence"
 }
 
 func decodeStrict(path string, target any) error {
@@ -183,4 +267,39 @@ func trustedDetailsURL(value, repository string) bool {
 	}
 	prefix := "/" + repository + "/actions/runs/"
 	return strings.HasPrefix(parsed.EscapedPath(), prefix) && len(parsed.EscapedPath()) > len(prefix)
+}
+
+func MarshalReport(report Report) ([]byte, error) {
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func RenderMarkdown(report Report) string {
+	var builder strings.Builder
+	builder.WriteString("# Release gate status\n\n")
+	fmt.Fprintf(&builder, "Source: `%s@%s`\n\n", markdownEscape(report.Repository), markdownEscape(report.SourceSHA))
+	fmt.Fprintf(&builder, "Satisfied gates: **%d of %d**. All gates satisfied: **%t**.\n\n", report.GatesSatisfied, report.GatesExpected, report.AllGatesSatisfied)
+	if len(report.Issues) > 0 {
+		builder.WriteString("## Evidence issues\n\n")
+		for _, issue := range report.Issues {
+			fmt.Fprintf(&builder, "- %s\n", markdownEscape(issue))
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString("| Gate | Required check | Satisfied | Evidence state | Reason |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- |\n")
+	for _, gate := range report.Gates {
+		state := gate.Status + "/" + gate.Conclusion
+		fmt.Fprintf(&builder, "| %s | %s | %t | %s | %s |\n", markdownEscape(gate.ID), markdownEscape(gate.Check), gate.Satisfied, markdownEscape(state), markdownEscape(gate.Reason))
+	}
+	builder.WriteString("\nA report is descriptive evidence only. It cannot authorize a tag, release, image publication, Marketplace submission, or launch.\n")
+	return builder.String()
+}
+
+func markdownEscape(value string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "|", "\\|", "*", "\\*", "_", "\\_", "`", "\\`")
+	return replacer.Replace(value)
 }
