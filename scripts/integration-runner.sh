@@ -170,7 +170,14 @@ async function isBlocked([host, port]) {
   }
 })().catch(() => process.exit(1));
 '
-if ! docker run --rm +  --network none +  --user 65532:65532 +  --cap-drop ALL +  --security-opt no-new-privileges:true +  --entrypoint node +  behaviorlock-runner:dev +  -e "$direct_probe"; then
+if ! docker run --rm \
+  --network none \
+  --user 65532:65532 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --entrypoint node \
+  behaviorlock-runner:dev \
+  -e "$direct_probe"; then
   echo "network-none preparation probe reached a direct destination" >&2
   exit 1
 fi
@@ -181,7 +188,34 @@ probe_network="behaviorlock-acq-egress-probe-$network_suffix"
 probe_volume="behaviorlock-acq-socket-probe-$network_suffix"
 docker network create --driver bridge "$probe_network" >/dev/null
 docker volume create --driver local "$probe_volume" >/dev/null
-docker run --detach +  --name "$probe_proxy" +  --network "$probe_network" +  --read-only +  --user 0:0 +  --cap-drop ALL +  --cap-add CHOWN +  --cap-add SETUID +  --cap-add SETGID +  --security-opt no-new-privileges:true +  --pids-limit 64 +  --memory 128m +  --memory-swap 128m +  --cpus 0.5 +  --ulimit nofile=256:256 +  --ulimit nproc=64:64 +  --ulimit core=0:0 +  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700 +  --mount "type=volume,source=$probe_volume,target=/proxy,volume-nocopy" +  --env HTTP_PROXY= +  --env HTTPS_PROXY= +  --env ALL_PROXY= +  --env NO_PROXY= +  --env http_proxy= +  --env https_proxy= +  --env all_proxy= +  --env no_proxy= +  behaviorlock-runner:dev proxy >/dev/null
+docker run --detach \
+  --name "$probe_proxy" \
+  --network "$probe_network" \
+  --read-only \
+  --user 0:0 \
+  --cap-drop ALL \
+  --cap-add CHOWN \
+  --cap-add SETUID \
+  --cap-add SETGID \
+  --security-opt no-new-privileges:true \
+  --pids-limit 64 \
+  --memory 128m \
+  --memory-swap 128m \
+  --cpus 0.5 \
+  --ulimit nofile=256:256 \
+  --ulimit nproc=64:64 \
+  --ulimit core=0:0 \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700 \
+  --mount "type=volume,source=$probe_volume,target=/proxy,volume-nocopy" \
+  --env HTTP_PROXY= \
+  --env HTTPS_PROXY= \
+  --env ALL_PROXY= \
+  --env NO_PROXY= \
+  --env http_proxy= \
+  --env https_proxy= \
+  --env all_proxy= \
+  --env no_proxy= \
+  behaviorlock-runner:dev proxy >/dev/null
 proxy_ready=false
 proxy_attempt=0
 while [ "$proxy_attempt" -lt 100 ]; do
@@ -225,7 +259,15 @@ socket.on("close", () => process.exit(response.startsWith("HTTP/1.1 " + expected
 for probe_case in 'attacker.invalid:443 403' 'registry.npmjs.org:443 200'; do
   # The values are fixed test cases, not untrusted input.
   # shellcheck disable=SC2086
-  docker run --rm +    --network none +    --user 65532:65532 +    --cap-drop ALL +    --security-opt no-new-privileges:true +    --mount "type=volume,source=$probe_volume,target=/proxy,readonly,volume-nocopy" +    --entrypoint node +    behaviorlock-runner:dev +    -e "$proxy_client" $probe_case
+  docker run --rm \
+    --network none \
+    --user 65532:65532 \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --mount "type=volume,source=$probe_volume,target=/proxy,readonly,volume-nocopy" \
+    --entrypoint node \
+    behaviorlock-runner:dev \
+    -e "$proxy_client" $probe_case
 done
 docker rm --force "$probe_proxy" >/dev/null
 probe_proxy=""
