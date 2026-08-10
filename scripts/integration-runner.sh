@@ -150,6 +150,22 @@ remove_resource_container() {
   fi
 }
 
+require_resource_match() {
+  pattern="$1"
+  description="$2"
+  output_file="$3"
+  error_file="$4"
+  if grep -Eq -- "$pattern" "$output_file"; then
+    return
+  fi
+  echo "resource fixture check failed: $description" >&2
+  echo "resource fixture stdout (tail):" >&2
+  tail -120 "$output_file" >&2 || true
+  echo "resource fixture stderr (tail):" >&2
+  tail -120 "$error_file" >&2 || true
+  exit 1
+}
+
 assert_no_capture_resources() {
   if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy)-'; then
     echo "capture left an analysis container behind" >&2
@@ -460,6 +476,7 @@ tracer_death_container=""
 
 docker build --pull=false --tag behaviorlock-resource-fixture:dev testdata/resource-fixture
 for fixture_mode in process descriptor tmpfs file output syscall; do
+  echo "resource fixture: exercising $fixture_mode boundary"
   resource_container="behaviorlock-resource-$fixture_mode-$network_suffix"
   resource_output="$temp_dir/resource-$fixture_mode.out"
   resource_error="$temp_dir/resource-$fixture_mode.err"
@@ -477,33 +494,33 @@ for fixture_mode in process descriptor tmpfs file output syscall; do
   fi
   case "$fixture_mode" in
     process)
-      grep -q 'EAGAIN' "$resource_output"
-      grep -q '/work/behaviorlock-process-boundary' "$resource_output"
-      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      require_resource_match 'EAGAIN' 'process exhaustion did not expose EAGAIN' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-process-boundary' 'process exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'process exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     descriptor)
-      grep -q 'EMFILE' "$resource_output"
-      grep -q '/work/behaviorlock-descriptor-boundary' "$resource_output"
-      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      require_resource_match 'EMFILE' 'descriptor exhaustion did not expose EMFILE' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-descriptor-boundary' 'descriptor exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'descriptor exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     tmpfs)
-      grep -q '/tmp/behaviorlock-tmpfs-boundary' "$resource_output"
-      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      require_resource_match '/tmp/behaviorlock-tmpfs-boundary' 'tmpfs exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'tmpfs exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     file)
-      grep -q '/work/behaviorlock-file-boundary' "$resource_output"
-      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      require_resource_match '/work/behaviorlock-file-boundary' 'file-size exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'file-size exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     output)
-      grep -q '/work/behaviorlock-output-boundary' "$resource_output"
-      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      require_resource_match '/work/behaviorlock-output-boundary' 'output exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'output exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     syscall)
       if [ "$resource_exit" -eq 0 ] || grep -q '^BEHAVIORLOCK_TRACE_END ' "$resource_output"; then
         echo "syscall-volume exhaustion produced a trusted completion" >&2
         exit 1
       fi
-      grep -Eq 'strace reported diagnostics|trace sentinel evidence is incomplete|No space left' "$resource_error"
+      require_resource_match 'strace reported diagnostics|trace sentinel evidence is incomplete|No space left' 'syscall-volume exhaustion had no bounded failure diagnostic' "$resource_error" "$resource_output"
       ;;
   esac
   remove_resource_container "$resource_container"
