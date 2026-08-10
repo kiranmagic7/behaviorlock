@@ -42,6 +42,7 @@ All notable changes will be documented here. The project follows Keep a Changelo
 34. Offline 30-second demo, reproducible terminal-recording source, and a clean-checkout usability journey
 35. Enumerated 14-gate status reporter that preserves all blocked reasons and never grants release authority
 36. Local usability observation schema for setup, capture, evidence, replay, comprehension, false-positive feedback, and cleanup
+37. Current inert example report and an implementation decision record that keeps launch authority closed
 
 ### Changed
 
@@ -72,3 +73,5 @@ All notable changes will be documented here. The project follows Keep a Changelo
 13. Generated canary values are never copied from the host or stored in normalized profile metadata.
 14. The optional sinkhole has no routed network, retains only bounded request counts and matching canary identifiers, and discards request bytes.
 15. Dependency review rejects `pull_request_target`, pull-request head checkout, contributor-supplied profiles, artifact Markdown, unpinned actions, and any execution in the comment-privileged workflow.
+16. Hosted containment tests prove exact trace capabilities, reject namespace and mount escalation, isolate package output from trace markers, verify blocked TCP and DNS, and fail closed without `SYS_PTRACE`.
+17. Security scans, protected proofs, trusted profiles, and dormant release builds pin the patched Go 1.25.12 toolchain instead of floating across patch versions.

@@ -248,6 +248,7 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 19. [Usability evidence](docs/USABILITY_METRICS.md) defines local, non-telemetry product measures.
 20. [Incident analysis template](docs/templates/INCIDENT_ANALYSIS.md) defines disclosure, redaction, uncertainty, and publication approval.
 21. [Example diff](docs/EXAMPLE_DIFF.md) reproduces the inert offline demonstration and explains the report.
+22. [Upgrade program decision](docs/UPGRADE_PROGRAM.md) records the authorized implementation scope and the launch boundary.
 
 ## Development
 
