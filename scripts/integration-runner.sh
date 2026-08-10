@@ -42,6 +42,7 @@ run_trace_container() {
   network_mode="${3:-none}"
   package_spec="${4:-behaviorlock-fixture@1.0.0}"
   capture_phase="${5:-lifecycle}"
+  capability_mode="${6:-with-ptrace}"
   sinkhole_enabled=0
   case "$network_mode" in
     container:behaviorlock-sinkhole-*) sinkhole_enabled=1 ;;
@@ -58,6 +59,11 @@ run_trace_container() {
     fi
     set -- "$@" --mount "type=volume,source=$sinkhole_resolver_volume,target=/etc/resolv.conf,readonly,volume-nocopy,volume-subpath=resolv.conf"
   fi
+  case "$capability_mode" in
+    with-ptrace) set -- "$@" --cap-add SYS_PTRACE ;;
+    without-ptrace) ;;
+    *) echo "unknown trace capability mode: $capability_mode" >&2; return 64 ;;
+  esac
   docker run "$@" \
     --network "$network_mode" \
     --read-only \
@@ -65,7 +71,6 @@ run_trace_container() {
     --cap-drop ALL \
     --cap-add SETUID \
     --cap-add SETGID \
-    --cap-add SYS_PTRACE \
     --security-opt no-new-privileges:true \
     --pids-limit 128 \
     --memory 512m \
@@ -241,6 +246,30 @@ require_trace_match() {
   exit 1
 }
 
+require_trace_count() {
+  pattern="$1"
+  expected="$2"
+  description="$3"
+  observed="$(grep -Ec -- "$pattern" "$trace_output" || true)"
+  if [ "$observed" -eq "$expected" ]; then
+    return
+  fi
+  echo "fixture trace count failed: $description; got $observed, want $expected" >&2
+  sed -n '1,240p' "$trace_output" >&2
+  exit 1
+}
+
+reject_trace_text() {
+  forbidden_text="$1"
+  description="$2"
+  if ! grep -Fq -- "$forbidden_text" "$trace_output"; then
+    return
+  fi
+  echo "fixture trace isolation failed: $description" >&2
+  sed -n '1,240p' "$trace_output" >&2
+  exit 1
+}
+
 require_profile_type() {
   behavior_type="$1"
   syscall_pattern="${2:-}"
@@ -256,15 +285,45 @@ require_profile_type() {
   exit 1
 }
 
+require_profile_observation() {
+  target="$1"
+  outcome="$2"
+  errno="$3"
+  description="$4"
+  if jq -e \
+    --arg target "$target" \
+    --arg outcome "$outcome" \
+    --arg errno "$errno" \
+    'any(.behaviors[]; .target == $target and .outcome == $outcome and ($errno == "" or .errno == $errno))' \
+    "$profile" >/dev/null; then
+    return
+  fi
+  echo "fixture profile check failed: $description" >&2
+  jq '.behaviors' "$profile" >&2
+  exit 1
+}
+
 docker build --pull=false --tag behaviorlock-runner-fixture:dev testdata/npm-fixture
 run_trace_container behaviorlock-runner-fixture:dev > "$trace_output"
 
-require_trace_match '^BEHAVIORLOCK_TRACE_V1$' 'missing trace header'
+require_trace_count '^BEHAVIORLOCK_TRACE_V1$' 1 'trusted trace header was missing or duplicated'
+require_trace_count '^BEHAVIORLOCK_TRACE_END exit=' 1 'trusted trace footer was missing or duplicated'
 require_trace_match '^BEHAVIORLOCK_TRACE_END exit=0$' 'lifecycle or tracer returned nonzero'
 require_trace_match '/proc/self/status' 'fixture did not inspect its effective capabilities'
 require_trace_match '/trace.*(EACCES|EPERM)' 'package code was not denied access to the trace directory'
+require_trace_match 'connect\(.*198\.51\.100\.1.* = -1 (EACCES|EPERM|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED)' 'TCP probe was not blocked in the raw trace'
+require_trace_match '(sendto|sendmsg|sendmmsg)\(.*198\.51\.100\.53.* = -1 (EACCES|EPERM|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED)' 'DNS probe was not blocked in the raw trace'
 if grep -q 'behaviorlock-canary.invalid/' "$trace_output"; then
   echo "trace disclosed canary secret contents" >&2
+  exit 1
+fi
+reject_trace_text '/tmp/behaviorlock-forged-syscall-marker' 'package output forged a syscall line'
+reject_trace_text 'BEHAVIORLOCK_TRACE_END exit=99' 'package output forged a trace footer'
+reject_trace_text 'BEHAVIORLOCK_FIXTURE_ANSI_PAYLOAD' 'package output entered the trace channel'
+reject_trace_text 'BEHAVIORLOCK_FIXTURE_WORKFLOW_COMMAND' 'a workflow command entered the trace channel'
+escape_character="$(printf '\033')"
+if grep -Fq -- "$escape_character" "$trace_output"; then
+  echo "fixture trace contained a raw terminal escape character" >&2
   exit 1
 fi
 
@@ -294,6 +353,10 @@ if go run ./cmd/behaviorlock validate --profile "$profile" --evidence "$tampered
 fi
 
 require_profile_type 'network.connect'
+require_profile_observation '/etc/behaviorlock-should-not-exist' 'blocked' 'EROFS' 'read only image root did not block a package write'
+# $WORK is the literal normalized path token in the JSON profile.
+# shellcheck disable=SC2016
+require_profile_observation '$WORK/behaviorlock-fixture-output' 'success' '' 'writable work tmpfs did not retain the fixture output'
 # $HOME is the literal normalized path token in the JSON profile.
 # shellcheck disable=SC2016
 grep -q '"target": "$HOME/.ssh/id_rsa"' "$profile"
@@ -308,6 +371,18 @@ require_profile_type 'process.create'
 require_profile_type 'process.ptrace'
 require_profile_type 'environment.timing'
 grep -q '"runtime": \[' "$profile"
+
+ptrace_failure_output="$temp_dir/no-ptrace.out"
+ptrace_failure_error="$temp_dir/no-ptrace.err"
+if run_trace_container behaviorlock-runner-fixture:dev "" none behaviorlock-fixture@1.0.0 lifecycle without-ptrace > "$ptrace_failure_output" 2> "$ptrace_failure_error"; then
+  echo "runner traced package code after SYS_PTRACE was removed" >&2
+  exit 1
+fi
+grep -q 'strace reported diagnostics; capture is incomplete' "$ptrace_failure_error"
+if grep -Eq '^BEHAVIORLOCK_TRACE_(V1|END )' "$ptrace_failure_output"; then
+  echo "unsupported tracing emitted a trusted trace envelope" >&2
+  exit 1
+fi
 
 baseline_profile="$temp_dir/baseline.profile.json"
 candidate_profile="$temp_dir/candidate.profile.json"

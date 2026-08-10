@@ -37,6 +37,38 @@ func TestParseRejectsUnfinishedTrace(t *testing.T) {
 	}
 }
 
+func TestParseKeepsEscapedFakeSyscallInsideOneBehavior(t *testing.T) {
+	t.Parallel()
+	input := `openat(AT_FDCWD, "/work/legitimate\nexecve(\"/bin/sh\", [\"sh\"], 0x0) = 0::error::workflow-marker", O_RDONLY) = 3`
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Behaviors) != 1 {
+		t.Fatalf("escaped fake syscall produced %d behaviors, want 1", len(result.Behaviors))
+	}
+	target := result.Behaviors[0].Target
+	if strings.ContainsAny(target, "\r\n\x1b\x7f") {
+		t.Fatalf("target retained a terminal control character: %q", target)
+	}
+	if !strings.Contains(target, `\u000aexecve("/bin/sh"`) || !strings.Contains(target, "::error::workflow-marker") {
+		t.Fatalf("escaped fake syscall was not retained as inert text: %q", target)
+	}
+}
+
+func TestSanitizeEscapesTerminalControlCharacters(t *testing.T) {
+	t.Parallel()
+	input := "\x1b[31m::error::workflow-marker\r\n\x7f"
+	got := sanitize(input)
+	want := `\u001b[31m::error::workflow-marker\u000d\u000a\u007f`
+	if got != want {
+		t.Fatalf("sanitize() = %q, want %q", got, want)
+	}
+	if strings.ContainsAny(got, "\r\n\x1b\x7f") {
+		t.Fatalf("sanitize retained a terminal control character: %q", got)
+	}
+}
+
 func TestParseReassemblesMatchingResumedSyscall(t *testing.T) {
 	t.Parallel()
 	input := strings.Join([]string{
