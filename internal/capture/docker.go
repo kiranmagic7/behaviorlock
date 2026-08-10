@@ -334,23 +334,27 @@ func classifyTraceFailure(contextErr error, traced commandResult, runErr error, 
 	}
 	if runErr != nil || traced.ExitCode != 0 || (state != nil && state.ExitCode != 0) {
 		exitCode := traced.ExitCode
-		message := safeDiagnostic(traced.Stderr)
+		diagnostic := safeDiagnostic(traced.Stderr)
 		if state != nil {
 			if state.ExitCode != 0 {
 				exitCode = state.ExitCode
 			}
-			if message == "" {
-				message = safeDiagnostic([]byte(state.Error))
+			if diagnostic == "" {
+				diagnostic = safeDiagnostic([]byte(state.Error))
 			}
 		}
+		message := "trace container exited before a verified completion marker"
 		if exitCode >= 128 {
 			message = fmt.Sprintf("trace supervisor ended with signal-style exit code %d", exitCode)
 		}
-		if message == "" {
-			message = "trace container exited before a verified completion marker"
+		operatorError := errors.New("trace container failed before a verified completion marker")
+		if diagnostic != "" {
+			operatorError = fmt.Errorf("trace container failed before a verified completion marker: %s", diagnostic)
+		} else if runErr != nil {
+			operatorError = fmt.Errorf("trace container failed before a verified completion marker: %w", runErr)
 		}
 		return model.Result{Status: "trace_incomplete", ExitCode: 2, Message: message},
-			errors.New("trace container failed before a verified completion marker")
+			operatorError
 	}
 	return model.Result{}, nil
 }

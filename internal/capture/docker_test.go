@@ -175,7 +175,7 @@ func TestClassifyTraceFailureKeepsBoundaryOutcomesDistinct(t *testing.T) {
 		{name: "signal style but not oom", result: commandResult{ExitCode: 137}, state: &containerState{ExitCode: 137}, status: "trace_incomplete"},
 		{name: "client success but container signal", result: commandResult{ExitCode: 0}, state: &containerState{ExitCode: 137}, status: "trace_incomplete"},
 		{name: "output truncation", result: commandResult{Truncated: true}, status: "trace_incomplete", truncated: true},
-		{name: "docker execution error", runErr: errors.New("docker unavailable"), status: "trace_incomplete"},
+		{name: "docker execution error", result: commandResult{Stderr: []byte("trusted supervisor diagnostic\nsecond line")}, runErr: errors.New("docker unavailable"), status: "trace_incomplete"},
 	}
 	for _, test := range tests {
 		test := test
@@ -184,6 +184,12 @@ func TestClassifyTraceFailureKeepsBoundaryOutcomesDistinct(t *testing.T) {
 			result, err := classifyTraceFailure(test.contextErr, test.result, test.runErr, test.state)
 			if err == nil || result.Status != test.status || result.TimedOut != test.timedOut || result.Truncated != test.truncated {
 				t.Fatalf("classification = %#v err=%v", result, err)
+			}
+			if strings.ContainsAny(result.Message, "\r\n\t") {
+				t.Fatalf("profile result contains operator diagnostics: %q", result.Message)
+			}
+			if test.name == "docker execution error" && !strings.Contains(err.Error(), "trusted supervisor diagnostic") {
+				t.Fatalf("operator error omitted bounded diagnostics: %v", err)
 			}
 		})
 	}
