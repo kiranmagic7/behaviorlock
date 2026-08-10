@@ -498,7 +498,7 @@ for fixture_mode in process descriptor tmpfs file output syscall; do
   case "$fixture_mode" in
     process)
       require_resource_match 'EAGAIN' 'process exhaustion did not expose EAGAIN' "$resource_output" "$resource_error"
-      require_resource_match '/work/behaviorlock-process-boundary' 'process exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-process-fixture-started' 'process exhaustion fixture did not reach its marker' "$resource_output" "$resource_error"
       require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'process exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     descriptor)
