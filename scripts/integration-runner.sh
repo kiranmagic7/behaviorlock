@@ -83,6 +83,7 @@ run_resource_trace_container() {
   fixture_mode="$1"
   container_name="$2"
   pids_limit=128
+  nproc_limit=128
   memory_limit=256m
   nofile_limit=1024
   file_limit=67108864
@@ -90,7 +91,10 @@ run_resource_trace_container() {
   temporary_size=32m
   trace_size=64m
   case "$fixture_mode" in
-    process) pids_limit=32 ;;
+    # Keep a container-wide reserve for the root-owned tracer and supervisor.
+    # The untrusted package runs as uid 65532 and reaches its lower RLIMIT_NPROC
+    # without starving trusted capture infrastructure of PID slots.
+    process) pids_limit=64; nproc_limit=24 ;;
     descriptor) nofile_limit=64 ;;
     tmpfs) work_size=4m ;;
     file) file_limit=1048576 ;;
@@ -115,7 +119,7 @@ run_resource_trace_container() {
     --memory-swap "$memory_limit" \
     --cpus 1 \
     --ulimit "nofile=$nofile_limit:$nofile_limit" \
-    --ulimit "nproc=$pids_limit:$pids_limit" \
+    --ulimit "nproc=$nproc_limit:$nproc_limit" \
     --ulimit "fsize=$file_limit:$file_limit" \
     --ulimit core=0:0 \
     --shm-size 8m \
