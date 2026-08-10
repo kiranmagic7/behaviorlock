@@ -169,19 +169,11 @@ case "$mode" in
       node /opt/behaviorlock/proxy.mjs
     ;;
   sinkhole)
-    if [ "$(id -u)" -ne 0 ]; then
-      echo "sinkhole supervisor must start as uid 0" >&2
+    if [ "$(id -u)" -ne 65532 ]; then
+      echo "sinkhole must run as uid 65532" >&2
       exit 70
     fi
-    exec setpriv \
-      --reuid=65532 \
-      --regid=65532 \
-      --clear-groups \
-      --inh-caps=+net_bind_service \
-      --ambient-caps=+net_bind_service \
-      --bounding-set=+net_bind_service \
-      --no-new-privs \
-      node /opt/behaviorlock/sinkhole.mjs
+    exec node /opt/behaviorlock/sinkhole.mjs
     ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \

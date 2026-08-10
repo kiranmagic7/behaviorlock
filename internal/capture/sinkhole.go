@@ -48,10 +48,10 @@ func buildSinkholeArgs(containerName, runnerImageID string, canaries []canarySpe
 		"run", "--detach",
 		"--name", containerName,
 		"--network", "none",
+		"--sysctl", "net.ipv4.ip_unprivileged_port_start=0",
 		"--read-only",
-		"--user", "0:0",
+		"--user", "65532:65532",
 		"--cap-drop", "ALL",
-		"--cap-add", "NET_BIND_SERVICE",
 		"--security-opt", "no-new-privileges:true",
 		"--pids-limit", "64",
 		"--memory", "128m",
@@ -60,7 +60,7 @@ func buildSinkholeArgs(containerName, runnerImageID string, canaries []canarySpe
 		"--ulimit", "nofile=256:256",
 		"--ulimit", "nproc=64:64",
 		"--ulimit", "core=0:0",
-		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=8m,uid=0,gid=0,mode=1777",
+		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700",
 		"--env", "BEHAVIORLOCK_SINKHOLE_CANARIES=" + encoded,
 	}
 	arguments = appendScrubbedProxyEnvironment(arguments)
@@ -78,10 +78,10 @@ func (runner *DockerRunner) startSinkhole(ctx context.Context, containerName, ru
 	}
 	for attempt := 0; attempt < 100; attempt++ {
 		logs, logErr := runner.run(ctx, []string{"logs", containerName}, 1<<20, 64<<10)
+		if logErr == nil && logs.ExitCode == 0 && len(bytes.TrimSpace(logs.Stderr)) != 0 {
+			return fmt.Errorf("sinkhole emitted startup diagnostics: %s", safeDiagnostic(logs.Stderr))
+		}
 		if logErr == nil && logs.ExitCode == 0 && strings.Contains(string(logs.Stdout), "BEHAVIORLOCK_SINKHOLE_READY_V1 "+sinkholePolicy) {
-			if len(bytes.TrimSpace(logs.Stderr)) != 0 {
-				return fmt.Errorf("sinkhole emitted startup diagnostics: %s", safeDiagnostic(logs.Stderr))
-			}
 			return nil
 		}
 		timer := time.NewTimer(50 * time.Millisecond)
@@ -92,7 +92,17 @@ func (runner *DockerRunner) startSinkhole(ctx context.Context, containerName, ru
 		case <-timer.C:
 		}
 	}
-	return errors.New("inert sinkhole did not become ready")
+	logs, logErr := runner.run(ctx, []string{"logs", containerName}, 1<<20, 64<<10)
+	if logErr != nil {
+		return fmt.Errorf("inert sinkhole did not become ready; read startup diagnostics: %w", logErr)
+	}
+	if diagnostic := safeDiagnostic(logs.Stderr); diagnostic != "" {
+		return fmt.Errorf("inert sinkhole did not become ready: %s", diagnostic)
+	}
+	if logs.ExitCode != 0 {
+		return fmt.Errorf("inert sinkhole did not become ready; docker logs exited %d", logs.ExitCode)
+	}
+	return errors.New("inert sinkhole did not become ready without diagnostics")
 }
 
 func (runner *DockerRunner) readSinkholeAudit(containerName string, canaries []canarySpec) (model.SinkholeInfo, error) {

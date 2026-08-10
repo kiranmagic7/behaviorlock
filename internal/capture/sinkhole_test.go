@@ -14,12 +14,12 @@ func TestSinkholeArgumentsHaveNoRouteOrHostMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(arguments, " ")
-	for _, required := range []string{"--network none", "--read-only", "--cap-drop ALL", "--cap-add NET_BIND_SERVICE", "no-new-privileges:true", "BEHAVIORLOCK_SINKHOLE_CANARIES="} {
+	for _, required := range []string{"--network none", "--sysctl net.ipv4.ip_unprivileged_port_start=0", "--read-only", "--user 65532:65532", "--cap-drop ALL", "no-new-privileges:true", "BEHAVIORLOCK_SINKHOLE_CANARIES="} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("sinkhole arguments are missing %q: %q", required, arguments)
 		}
 	}
-	for _, forbidden := range []string{"--privileged", "--network host", "/var/run/docker.sock", canaries[0].Value} {
+	for _, forbidden := range []string{"--privileged", "--network host", "--cap-add", "/var/run/docker.sock", canaries[0].Value} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("sinkhole arguments expose forbidden value %q: %q", forbidden, arguments)
 		}

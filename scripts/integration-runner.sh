@@ -496,10 +496,10 @@ sinkhole_container="behaviorlock-sinkhole-fixture-$network_suffix"
 docker run --detach \
   --name "$sinkhole_container" \
   --network none \
+  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
   --read-only \
-  --user 0:0 \
+  --user 65532:65532 \
   --cap-drop ALL \
-  --cap-add NET_BIND_SERVICE \
   --security-opt no-new-privileges:true \
   --pids-limit 64 \
   --memory 128m \
@@ -508,7 +508,7 @@ docker run --detach \
   --ulimit nofile=256:256 \
   --ulimit nproc=64:64 \
   --ulimit core=0:0 \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=0,gid=0,mode=1777 \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700 \
   --env BEHAVIORLOCK_SINKHOLE_CANARIES=W3siaWQiOiJjYW5hcnk6Z2l0aHViLXRva2VuIiwidmFsdWUiOiJiZWhhdmlvcmxvY2stY2FuYXJ5LmludmFsaWQvaW50ZWdyYXRpb24tZ2l0aHViLXRva2VuLzAwMDAwMDAwMDAwMDAwMDgifV0 \
   behaviorlock-runner:dev sinkhole >/dev/null
 sinkhole_ready=false
@@ -534,8 +534,8 @@ if [ "$(docker exec "$sinkhole_container" awk '/^Uid:/ { print $2 }' /proc/1/sta
   echo "inert sinkhole PID 1 did not drop to uid 65532" >&2
   exit 1
 fi
-if [ "$(docker exec "$sinkhole_container" awk '/^CapEff:/ { print $2 }' /proc/1/status)" != "0000000000000400" ]; then
-  echo "inert sinkhole retained capabilities beyond NET_BIND_SERVICE" >&2
+if [ "$(docker exec "$sinkhole_container" awk '/^CapEff:/ { print $2 }' /proc/1/status)" != "0000000000000000" ]; then
+  echo "inert sinkhole retained an effective capability" >&2
   exit 1
 fi
 
