@@ -681,9 +681,18 @@ func parsePrepareMetadata(output []byte) (PrepareMetadata, error) {
 		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
+		decoder := json.NewDecoder(strings.NewReader(strings.TrimPrefix(line, prefix)))
+		decoder.DisallowUnknownFields()
 		var metadata PrepareMetadata
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &metadata); err != nil {
+		if err := decoder.Decode(&metadata); err != nil {
 			return PrepareMetadata{}, fmt.Errorf("decode preparation metadata: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			if err == nil {
+				return PrepareMetadata{}, errors.New("decode preparation metadata: trailing JSON value")
+			}
+			return PrepareMetadata{}, fmt.Errorf("decode preparation metadata trailing data: %w", err)
 		}
 		if !model.ValidRegistryIntegrity(metadata.Integrity) {
 			return PrepareMetadata{}, errors.New("npm registry integrity metadata is missing or unsupported")

@@ -218,6 +218,24 @@ func TestParsePrepareMetadata(t *testing.T) {
 	}
 }
 
+func TestParsePrepareMetadataRejectsUnknownAndTrailingJSON(t *testing.T) {
+	t.Parallel()
+	valid := strings.TrimSpace(strings.TrimPrefix(testPrepareOutput, "BEHAVIORLOCK_PREP_V1 "))
+	tests := map[string]string{
+		"unknown field":  strings.Replace(valid, `"importReason":""}`, `"importReason":"","unexpected":"value"}`, 1),
+		"trailing value": valid + ` {}`,
+	}
+	for name, payload := range tests {
+		name, payload := name, payload
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := parsePrepareMetadata([]byte("BEHAVIORLOCK_PREP_V1 " + payload + "\n")); err == nil {
+				t.Fatal("untrusted preparation metadata unexpectedly passed strict decoding")
+			}
+		})
+	}
+}
+
 func TestAcquisitionProxyAuditRejectsAnyDeniedRequest(t *testing.T) {
 	t.Parallel()
 	runner := &DockerRunner{dockerPath: "docker"}
