@@ -511,7 +511,7 @@ for fixture_mode in process descriptor tmpfs file output syscall; do
       require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'tmpfs exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
     file)
-      require_resource_match '/work/behaviorlock-file-fixture-started' 'file-size fixture did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-file-limit' 'file-size fixture did not open its bounded target' "$resource_output" "$resource_error"
       require_resource_match 'EFBIG|SIGXFSZ' 'file-size exhaustion did not expose its kernel boundary' "$resource_output" "$resource_error"
       require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'file-size exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
       ;;
