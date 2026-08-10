@@ -221,7 +221,7 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	profile.Capture.DurationMillis = duration.Milliseconds()
 
 	var inspectedState *containerState
-	if captureContext.Err() == nil && (runErr != nil || traced.ExitCode != 0) {
+	if captureContext.Err() == nil {
 		if state, inspectErr := runner.inspectContainerState(traceContainer); inspectErr == nil {
 			inspectedState = &state
 		}
@@ -263,7 +263,7 @@ func classifyTraceFailure(contextErr error, traced commandResult, runErr error, 
 		return model.Result{Status: "trace_incomplete", ExitCode: 2, Truncated: true, Message: "trace output exceeded the capture limit"},
 			errors.New("trace output was truncated and cannot produce a complete profile")
 	}
-	if runErr != nil || traced.ExitCode != 0 {
+	if runErr != nil || traced.ExitCode != 0 || (state != nil && state.ExitCode != 0) {
 		exitCode := traced.ExitCode
 		message := safeDiagnostic(traced.Stderr)
 		if state != nil {

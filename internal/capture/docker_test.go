@@ -136,6 +136,7 @@ func TestClassifyTraceFailureKeepsBoundaryOutcomesDistinct(t *testing.T) {
 		{name: "cancellation", contextErr: context.Canceled, status: "trace_incomplete"},
 		{name: "authoritative oom", result: commandResult{ExitCode: 137}, state: &containerState{OOMKilled: true, ExitCode: 137}, status: "resource_exhausted"},
 		{name: "signal style but not oom", result: commandResult{ExitCode: 137}, state: &containerState{ExitCode: 137}, status: "trace_incomplete"},
+		{name: "client success but container signal", result: commandResult{ExitCode: 0}, state: &containerState{ExitCode: 137}, status: "trace_incomplete"},
 		{name: "output truncation", result: commandResult{Truncated: true}, status: "trace_incomplete", truncated: true},
 		{name: "docker execution error", runErr: errors.New("docker unavailable"), status: "trace_incomplete"},
 	}
@@ -229,6 +230,8 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 			return commandResult{Stdout: []byte(testPreparedImageID + "\n")}, nil
 		case "start":
 			return commandResult{Stdout: []byte(testPrepareOutput)}, nil
+		case "inspect":
+			return commandResult{Stdout: []byte(`{"OOMKilled":false,"ExitCode":0,"Error":""}`)}, nil
 		case "run":
 			if arguments[len(arguments)-1] == "proxy" {
 				return commandResult{Stdout: []byte("proxy-container-id\n")}, nil
@@ -303,6 +306,8 @@ func TestCaptureRejectsMissingTraceFooter(t *testing.T) {
 			return commandResult{Stdout: []byte(testPreparedImageID + "\n")}, nil
 		case "start":
 			return commandResult{Stdout: []byte(testPrepareOutput)}, nil
+		case "inspect":
+			return commandResult{Stdout: []byte(`{"OOMKilled":false,"ExitCode":0,"Error":""}`)}, nil
 		case "run":
 			if arguments[len(arguments)-1] == "proxy" {
 				return commandResult{Stdout: []byte("proxy-container-id\n")}, nil
