@@ -15,6 +15,8 @@ Imagine that version 1.0.0 creates a cache directory during installation. Versio
 
 BehaviorLock reports the shell launch and credential path read as new observations. It does not decide why they happened. A maintainer reviews the evidence and decides whether the change is expected.
 
+The [complete inert example](docs/EXAMPLE_DIFF.md) shows the exact safe command and resulting report without downloading or executing a package.
+
 ## Status at a glance
 
 | Question | Current answer |
@@ -245,6 +247,7 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 18. [Inert benchmark report](benchmark/REPORT.md) records exact fixture expectations and separates them from projected historical coverage.
 19. [Usability evidence](docs/USABILITY_METRICS.md) defines local, non-telemetry product measures.
 20. [Incident analysis template](docs/templates/INCIDENT_ANALYSIS.md) defines disclosure, redaction, uncertainty, and publication approval.
+21. [Example diff](docs/EXAMPLE_DIFF.md) reproduces the inert offline demonstration and explains the report.
 
 ## Development
 
