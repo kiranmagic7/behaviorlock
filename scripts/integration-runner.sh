@@ -606,6 +606,7 @@ repeat_lines="$repeat_dir/runs.jsonl"
 : > "$repeat_lines"
 reference_profile_digest=""
 reference_behavior_digest=""
+reference_profile=""
 repeat_index=1
 while [ "$repeat_index" -le 10 ]; do
   echo "repeatability fixture: run $repeat_index of 10"
@@ -638,9 +639,16 @@ while [ "$repeat_index" -le 10 ]; do
   if [ "$repeat_index" -eq 1 ]; then
     reference_profile_digest="$profile_digest"
     reference_behavior_digest="$behavior_digest"
+    reference_profile="$repeat_profile"
   elif [ "$profile_digest" != "$reference_profile_digest" ] || [ "$behavior_digest" != "$reference_behavior_digest" ]; then
     echo "trusted fixture repeatability changed semantic behavior" >&2
     jq -s . "$repeat_lines" >&2
+    jq -S '[.behaviors[] | {id, type, operation, target, arguments, outcome, errno, sensitive, sourceCall}]' \
+      "$reference_profile" > "$repeat_dir/reference-behaviors.json"
+    jq -S '[.behaviors[] | {id, type, operation, target, arguments, outcome, errno, sensitive, sourceCall}]' \
+      "$repeat_profile" > "$repeat_dir/current-behaviors.json"
+    echo "normalized behavior set difference (reference then current):" >&2
+    diff -u "$repeat_dir/reference-behaviors.json" "$repeat_dir/current-behaviors.json" >&2 || true
     exit 1
   fi
   repeat_index=$((repeat_index + 1))
