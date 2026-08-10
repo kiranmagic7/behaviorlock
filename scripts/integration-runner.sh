@@ -76,6 +76,16 @@ require_trace_match() {
   exit 1
 }
 
+require_profile_type() {
+  behavior_type="$1"
+  if jq -e --arg behavior_type "$behavior_type" '.behaviors | any(.type == $behavior_type)' "$profile" >/dev/null; then
+    return
+  fi
+  echo "fixture profile check failed: missing $behavior_type" >&2
+  jq -r '.behaviors[].type' "$profile" | sort -u >&2
+  exit 1
+}
+
 docker build --pull=false --tag behaviorlock-runner-fixture:dev testdata/npm-fixture
 run_trace_container behaviorlock-runner-fixture:dev > "$trace_output"
 
@@ -113,20 +123,20 @@ if go run ./cmd/behaviorlock validate --profile "$profile" --evidence "$tampered
   exit 1
 fi
 
-grep -q '"type": "network.connect"' "$profile"
+require_profile_type 'network.connect'
 # $HOME is the literal normalized path token in the JSON profile.
 # shellcheck disable=SC2016
 grep -q '"target": "$HOME/.ssh/id_rsa"' "$profile"
 grep -q '"sensitive": true' "$profile"
 grep -q '"target": "/bin/sh"' "$profile"
-grep -q '"type": "network.dns"' "$profile"
-grep -q '"type": "network.listen"' "$profile"
-grep -q '"type": "network.accept"' "$profile"
-grep -q '"type": "filesystem.descriptor_write"' "$profile"
-grep -q '"type": "filesystem.enumerate"' "$profile"
-grep -q '"type": "process.create"' "$profile"
-grep -q '"type": "process.ptrace"' "$profile"
-grep -q '"type": "environment.timing"' "$profile"
+require_profile_type 'network.dns'
+require_profile_type 'network.listen'
+require_profile_type 'network.accept'
+require_profile_type 'filesystem.descriptor_write'
+require_profile_type 'filesystem.enumerate'
+require_profile_type 'process.create'
+require_profile_type 'process.ptrace'
+require_profile_type 'environment.timing'
 grep -q '"runtime": \[' "$profile"
 
 baseline_profile="$temp_dir/baseline.profile.json"
