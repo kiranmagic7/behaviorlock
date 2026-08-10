@@ -28,6 +28,7 @@ var (
 	procPIDPattern   = regexp.MustCompile(`/proc/[0-9]+(?:/|$)`)
 	tmpPattern       = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
 	nodeCachePattern = regexp.MustCompile(`/tmp/node-compile-cache/([^/\s",)]+)/([0-9a-f]{8})\.[0-9A-Za-z]{6}`)
+	npmLogPattern    = regexp.MustCompile(`^\$WORK/\.npm-cache/_logs/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}_[0-9]{2}_[0-9]{2}_[0-9]{3}Z-debug-[0-9]+\.log$`)
 	portPattern      = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
 	ipv4Pattern      = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
 	ipv6Pattern      = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
@@ -196,6 +197,9 @@ func normalizePath(value string) string {
 	value = sanitize(value)
 	value = normalizeRoot(value, "/home/scanner", "$HOME")
 	value = normalizeRoot(value, "/work", "$WORK")
+	value = npmLogPattern.ReplaceAllStringFunc(value, func(string) string {
+		return "$WORK/.npm-cache/_logs/$TIMESTAMP-debug-$N.log"
+	})
 	value = procPIDPattern.ReplaceAllStringFunc(value, func(match string) string {
 		if strings.HasSuffix(match, "/") {
 			return "/proc/$PID/"

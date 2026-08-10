@@ -368,6 +368,20 @@ func TestNormalizePathReplacesNodeCompileCacheNonceOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizePathReplacesNPMDebugLogTimestamp(t *testing.T) {
+	t.Parallel()
+	first := normalizePath("/work/.npm-cache/_logs/2026-08-10T05_19_29_294Z-debug-0.log")
+	second := normalizePath("/work/.npm-cache/_logs/2026-08-10T05_19_31_632Z-debug-0.log")
+	want := "$WORK/.npm-cache/_logs/$TIMESTAMP-debug-$N.log"
+	if first != want || second != want {
+		t.Fatalf("npm debug timestamp was not normalized: first=%q second=%q", first, second)
+	}
+	lookalike := "/work/.npm-cache/_logs/not-a-timestamp-debug-0.log"
+	if got := normalizePath(lookalike); got != "$WORK/.npm-cache/_logs/not-a-timestamp-debug-0.log" {
+		t.Fatalf("lookalike npm log was rewritten: %q", got)
+	}
+}
+
 func TestParseObservesEnvironmentFingerprintPaths(t *testing.T) {
 	t.Parallel()
 	input := strings.Join([]string{
