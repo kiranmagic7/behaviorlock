@@ -18,7 +18,9 @@ case "$mode" in
     exec node -e 'const chunk=Buffer.alloc(1024 * 1024, 0x42); for (let i=0; i<80; i += 1) process.stdout.write(chunk);'
     ;;
   signal)
-    kill -KILL "$$"
+    # Exercise the signal-style exit-code classification deterministically.
+    # Real tracer death is covered separately by the kill-real-strace fixture.
+    exit 137
     ;;
   *)
     echo "unknown controlled runner mode: $mode" >&2
