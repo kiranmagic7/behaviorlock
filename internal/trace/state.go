@@ -2,6 +2,7 @@ package trace
 
 import (
 	"errors"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -146,7 +147,7 @@ func (state *parserState) parseSyscall(process, line string, evidence []model.Ev
 		}
 		behavior := model.Behavior{
 			Type: behaviorType, Operation: "exec", Target: target,
-			Arguments: sanitizeValues(visibleArguments), Outcome: outcome, Errno: errno,
+			Arguments: normalizeExecArguments(target, visibleArguments), Outcome: outcome, Errno: errno,
 			Count: 1, Evidence: evidence, SourceCall: call,
 		}
 		behavior.Runtime = []model.RuntimeContext{state.runtimeContext(process, descriptor, attribution)}
@@ -458,6 +459,34 @@ func (state *parserState) parseSyscall(process, line string, evidence []model.Ev
 	default:
 		return model.Behavior{}, false, nil
 	}
+}
+
+func normalizeExecArguments(target string, values []string) []string {
+	arguments := sanitizeValues(values)
+	if path.Base(target) != "strace" {
+		return arguments
+	}
+	for index := range arguments {
+		switch {
+		case index > 0 && (arguments[index-1] == "-p" || arguments[index-1] == "--attach") && decimalProcessIdentifier(arguments[index]):
+			arguments[index] = "$PID"
+		case strings.HasPrefix(arguments[index], "--attach=") && decimalProcessIdentifier(strings.TrimPrefix(arguments[index], "--attach=")):
+			arguments[index] = "--attach=$PID"
+		}
+	}
+	return arguments
+}
+
+func decimalProcessIdentifier(value string) bool {
+	if value == "" || value == "0" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (state *parserState) behavior(process string, descriptor int, attribution, kind, operation, target, call, outcome, errno string, evidence []model.EvidenceRef) model.Behavior {

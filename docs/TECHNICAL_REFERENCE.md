@@ -217,7 +217,7 @@ The parser keeps bounded descriptor tables separately for each observed process.
 
 Each behavior can retain bounded runtime context for review, including the observed process, its known parent, the descriptor number, and whether attribution was direct, descriptor-derived, or unknown. These capture-local identifiers do not alter behavior identity or the stable digest. Process lineage, descriptor context, event counts, and evidence coordinates may differ between semantically equivalent runs.
 
-Numeric process paths normalize at a path boundary, so `/proc/123/status` becomes `/proc/$PID/status` while a lookalike such as `/proc/123-backup/status` stays unchanged. Earlier development profiles affected by the old replacement bug can contain a different target and stable digest. Recapture both versions with the same BehaviorLock commit before using such profiles in a comparison.
+Numeric process paths normalize at a path boundary, so `/proc/123/status` becomes `/proc/$PID/status` while a lookalike such as `/proc/123-backup/status` stays unchanged. Numeric process identifiers passed through the `strace -p`, `strace --attach`, or `strace --attach=` forms also normalize to `$PID`; other numeric executable arguments remain unchanged. Earlier development profiles affected by either normalization boundary can contain a different target or argument and stable digest. Recapture both versions with the same BehaviorLock commit before using such profiles in a comparison.
 
 ## CLI commands
 

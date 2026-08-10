@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -321,6 +322,28 @@ func TestParseDoesNotTreatOrdinaryExecveatDotPathAsFileless(t *testing.T) {
 	}
 	if len(result.Behaviors) != 1 || result.Behaviors[0].Type != "process.exec" || result.Behaviors[0].Target != "." {
 		t.Fatalf("ordinary execveat dot path was misclassified: %#v", result.Behaviors)
+	}
+}
+
+func TestParseNormalizesStraceAttachProcessIdentifiers(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`700 execve("/usr/bin/strace", ["strace", "-qq", "-p", "33", "--attach=34"], 0x0) = 0`,
+		`701 execve("/usr/bin/node", ["node", "-p", "33"], 0x0) = 0`,
+		`702 execve("/usr/bin/strace", ["strace", "-p", "not-a-pid"], 0x0) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Behaviors[0].Arguments; !slices.Equal(got, []string{"strace", "-qq", "-p", "$PID", "--attach=$PID"}) {
+		t.Fatalf("normalized strace arguments = %#v", got)
+	}
+	if got := result.Behaviors[1].Arguments; !slices.Equal(got, []string{"node", "-p", "33"}) {
+		t.Fatalf("ordinary numeric arguments changed = %#v", got)
+	}
+	if got := result.Behaviors[2].Arguments; !slices.Equal(got, []string{"strace", "-p", "not-a-pid"}) {
+		t.Fatalf("nonnumeric strace argument changed = %#v", got)
 	}
 }
 

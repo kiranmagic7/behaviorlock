@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -100,6 +101,7 @@ jobs:
         if: github.actor != 'dependabot[bot]'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           checker="$RUNNER_TEMP/check-dco.sh"
@@ -111,7 +113,13 @@ jobs:
             mode="github-squash"
           fi
           chmod 0700 "$checker"
-          "$checker" "$BASE_SHA" "$HEAD_SHA" "$mode"
+          verification_base="$BASE_SHA"
+          if [ "${{ github.event_name }}" = "push" ] &&
+             [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] &&
+             git rev-parse --verify --quiet "$BASE_SHA^" >/dev/null; then
+            verification_base="$(git rev-parse "$BASE_SHA^")"
+          fi
+          "$checker" "$verification_base" "$HEAD_SHA" "$mode"
       - name: Accept GitHub authenticated Dependabot update
         if: github.actor == 'dependabot[bot]'
         run: |

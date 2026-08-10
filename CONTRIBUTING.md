@@ -64,7 +64,9 @@ The signoff certifies that you have the right to submit the work under Apache Li
 
 Human commits require signoff. GitHub authenticated Dependabot pull requests are the only automated exception; author names or email addresses alone never qualify for an exemption.
 
-Pull request commits use strict matching between the commit author and the `Signed-off-by` trailer. On protected `main`, GitHub may create a squash commit under the authenticated account login while preserving a GitHub noreply signoff from the reviewed commit. The push checker accepts that case only when GitHub is the recorded committer and the signoff email belongs to the same GitHub login. This limited path is unavailable to pull request commits.
+Pull request commits use strict matching between the commit author and the `Signed-off-by` trailer. On protected `main`, GitHub may create a squash commit under the authenticated account login while preserving a GitHub noreply signoff from the reviewed commit. The push checker accepts that case only when GitHub is the recorded committer and the signoff email belongs to the same GitHub login.
+
+If GitHub omits the trailer from its generated squash commit, the push checker fails closed unless GitHub identifies exactly one merged pull request for that commit, the pull request base is the squash parent, the retained pull request head has the same tree as the squash, and every source commit passes strict DCO verification. The checker reads only GitHub pull request metadata and the retained pull request ref. This limited path is unavailable to pull request commits.
 
 ## Review
 
