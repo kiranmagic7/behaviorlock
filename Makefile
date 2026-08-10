@@ -19,6 +19,7 @@ check:
 	test -z "$$(gofmt -l cmd internal schemas)"
 	go vet ./...
 	go test -race ./...
+	node --test runner/*.test.mjs
 	sh -n runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
 	command -v shellcheck >/dev/null
 	shellcheck runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh

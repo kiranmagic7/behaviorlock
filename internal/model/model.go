@@ -71,8 +71,16 @@ type CaptureInfo struct {
 	Attestation      string            `json:"attestation"`
 	DurationMillis   int64             `json:"durationMillis,omitempty"`
 	Coverage         CaptureCoverage   `json:"coverage"`
+	Acquisition      *AcquisitionInfo  `json:"acquisition,omitempty"`
 	EvidenceArtifact *EvidenceArtifact `json:"evidenceArtifact,omitempty"`
 	Experimental     bool              `json:"experimental"`
+}
+
+type AcquisitionInfo struct {
+	NetworkMode        string `json:"networkMode"`
+	PolicyVersion      string `json:"policyVersion"`
+	AllowedAuthority   string `json:"allowedAuthority"`
+	ProxyRunnerImageID string `json:"proxyRunnerImageId"`
 }
 
 type EvidenceArtifact struct {
@@ -368,6 +376,11 @@ func ValidateProfile(p Profile) error {
 			return err
 		}
 	}
+	if p.Capture.Acquisition != nil {
+		if err := validateAcquisition(*p.Capture.Acquisition); err != nil {
+			return err
+		}
+	}
 	switch p.Capture.TraceIntegrity {
 	case "isolated-root-tracer":
 		if p.Capture.NetworkMode != "none" || p.Capture.SandboxProfile != "behaviorlock-linux-npm-v1" {
@@ -392,6 +405,12 @@ func ValidateProfile(p Profile) error {
 			if p.Subject.RegistryIntegrity == "" || p.Subject.DependencyLockSHA256 == "" {
 				return errors.New("captured profile is missing acquisition provenance")
 			}
+			if p.Capture.Acquisition == nil || p.Capture.Acquisition.NetworkMode != "registry-proxy-unix" ||
+				p.Capture.Acquisition.PolicyVersion != "npm-registry-connect-v1" ||
+				p.Capture.Acquisition.AllowedAuthority != "registry.npmjs.org:443" ||
+				p.Capture.Acquisition.ProxyRunnerImageID != p.Capture.RunnerImageID {
+				return errors.New("captured profile is missing the acquisition egress fingerprint")
+			}
 			if p.Capture.EvidenceArtifact == nil || p.Capture.EvidenceArtifact.Retention != "retained" || p.Capture.EvidenceArtifact.Envelope != "behaviorlock-trace-v1-payload" {
 				return errors.New("captured profile is missing retained raw evidence metadata")
 			}
@@ -405,6 +424,9 @@ func ValidateProfile(p Profile) error {
 		}
 		if (p.Result.Status == "complete" || p.Result.Status == "command_failed") && (p.Capture.EvidenceArtifact == nil || p.Capture.EvidenceArtifact.Retention != "external-unverified" || p.Capture.EvidenceArtifact.Envelope != "external-strace") {
 			return errors.New("external profile is missing retained unverified evidence metadata")
+		}
+		if p.Capture.Acquisition != nil {
+			return errors.New("external profile must not claim trusted acquisition controls")
 		}
 	default:
 		return fmt.Errorf("unsupported trace integrity %q", p.Capture.TraceIntegrity)
@@ -524,6 +546,14 @@ func validateEvidenceArtifact(artifact EvidenceArtifact) error {
 	case "behaviorlock-trace-v1-payload", "external-strace":
 	default:
 		return errors.New("raw evidence envelope is invalid")
+	}
+	return nil
+}
+
+func validateAcquisition(acquisition AcquisitionInfo) error {
+	if acquisition.NetworkMode != "registry-proxy-unix" || acquisition.PolicyVersion != "npm-registry-connect-v1" ||
+		acquisition.AllowedAuthority != "registry.npmjs.org:443" || !validDigest(acquisition.ProxyRunnerImageID) {
+		return errors.New("acquisition egress fingerprint is invalid")
 	}
 	return nil
 }

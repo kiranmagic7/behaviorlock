@@ -37,7 +37,7 @@ Fake credential files are placed inside the disposable container so access attem
 
 Lifecycle execution uses Docker network mode `none`. Connect attempts can still appear in `strace`, but they cannot reach an external destination through the container network.
 
-The preparation phase has registry access while scripts are disabled. This reduces risk but does not make acquisition harmless. Package and transitive dependency metadata can influence npm fetch destinations. A disposable runner must not have routes to private services, cloud metadata, or trusted local infrastructure. An allowlisted acquisition network remains a release blocker.
+The preparation container uses network mode `none`. Npm can reach only a loopback relay into a private Unix socket. The proxy sidecar accepts CONNECT only for `registry.npmjs.org:443`, rejects unsafe or mixed DNS answers, and dials a validated public IP without a second lookup. Lockfile validation rejects nonregistry dependency sources. This limits acquisition destinations but does not make registry metadata or package archives trustworthy. Hosted proof and security review remain required before the release gate closes.
 
 ### Host modification
 
@@ -61,7 +61,7 @@ Profile JSON and its raw evidence companion are not signed. A contributor can fo
 
 ## Residual risk
 
-Containers are not virtual machines. Docker and `strace` do not contain every hostile package. Rootless Docker, user namespace remapping, Docker Desktop's virtual machine, or a disposable Linux virtual machine reduces risk. Acquisition can still reach destinations available to the Docker bridge. Unknown hostile packages should not run on a personal workstation or a network trusted host.
+Containers are not virtual machines. Docker and `strace` do not contain every hostile package. Rootless Docker, user namespace remapping, Docker Desktop's virtual machine, or a disposable Linux virtual machine reduces risk. The trusted proxy can reach its egress bridge, while policy restricts untrusted acquisition requests to one registry authority. Unknown hostile packages should not run on a personal workstation or a network trusted host.
 
 ## Security release gate
 

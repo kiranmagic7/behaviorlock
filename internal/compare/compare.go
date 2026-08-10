@@ -50,6 +50,21 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 			return model.Diff{}, fmt.Errorf("profiles have different %s: %s and %s", label, values[0], values[1])
 		}
 	}
+	if (baseline.Capture.Acquisition == nil) != (candidate.Capture.Acquisition == nil) {
+		return model.Diff{}, fmt.Errorf("profiles use different acquisition controls")
+	}
+	if baseline.Capture.Acquisition != nil {
+		for label, values := range map[string][2]string{
+			"acquisition network mode":      {baseline.Capture.Acquisition.NetworkMode, candidate.Capture.Acquisition.NetworkMode},
+			"acquisition policy version":    {baseline.Capture.Acquisition.PolicyVersion, candidate.Capture.Acquisition.PolicyVersion},
+			"acquisition allowed authority": {baseline.Capture.Acquisition.AllowedAuthority, candidate.Capture.Acquisition.AllowedAuthority},
+			"acquisition proxy image id":    {baseline.Capture.Acquisition.ProxyRunnerImageID, candidate.Capture.Acquisition.ProxyRunnerImageID},
+		} {
+			if values[0] != values[1] {
+				return model.Diff{}, fmt.Errorf("profiles have different %s: %s and %s", label, values[0], values[1])
+			}
+		}
+	}
 	baseline.Normalize()
 	candidate.Normalize()
 	baselineDigest, err := baseline.StableDigest()

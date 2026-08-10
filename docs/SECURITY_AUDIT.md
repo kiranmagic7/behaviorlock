@@ -12,6 +12,8 @@
 
 The schema v2 retained-evidence work was implemented after this reviewed base. Its local regression suite checks whole-artifact and exact-line tamper rejection, but it does not inherit this audit decision. A new review and hosted evidence are required before release gate 13 can be closed.
 
+The acquisition proxy work was also implemented after this reviewed base. Preparation now uses network mode `none` and reaches an exact-registry proxy through a private Unix socket. This design and its tests do not inherit the audit decision above; gate 6 still requires a new review and hosted proof.
+
 ## Method
 
 The review combined:
@@ -67,7 +69,7 @@ The fix validates the decoded SHA 512 length, runner image content ID, lifecycle
 
 Preparation needs npm registry access. Lifecycle scripts are disabled, but package and transitive dependency metadata can still influence what npm fetches. The preparation container can potentially reach destinations beyond the public npm registry, including addresses reachable from the Docker bridge.
 
-This remains a release blocker. Until an allowlisted acquisition proxy, equivalent egress control, or a stronger disposable virtual machine design exists, capture must run on an ephemeral host with no access to private networks, cloud metadata, trusted services, or credentials.
+The post-review feature branch adds an allowlisted proxy with network-none preparation. The risk remains open in this audit record until that implementation passes hosted adversarial tests and a new review. Capture must still run on a disposable host with no trusted workloads or credentials.
 
 ### Containers share the host kernel
 

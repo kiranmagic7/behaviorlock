@@ -46,9 +46,9 @@ The local tag `behaviorlock-runner:dev` is inspected once to obtain its Docker c
 
 ### Preparation
 
-Preparation runs as uid `65532` with lifecycle scripts disabled. It receives no host mounts, Docker socket, home directory, npm configuration, Git configuration, SSH data, cloud credentials, or repository tokens. Uppercase and lowercase HTTP, HTTPS, all proxy, and no proxy variables are explicitly set to empty so Docker client proxy configuration cannot enter the container.
+Preparation runs as uid `65532` with lifecycle scripts disabled and Docker network mode `none`. It receives no host mounts, Docker socket, home directory, npm configuration, Git configuration, SSH data, cloud credentials, or repository tokens. Docker client proxy configuration is replaced with an exact loopback proxy address.
 
-It has registry network access. This is a weaker boundary than execution. Dependency metadata can influence outbound acquisition requests, and the phase has no portable overlay disk quota. It belongs on a disposable runner with no route to sensitive private services.
+The loopback relay can reach only a randomly named private Unix socket. An unprivileged sidecar proxy accepts CONNECT only for `registry.npmjs.org:443`, rejects any DNS answer set containing a nonpublic address, and dials the selected validated IP directly. The lockfile inventory rejects nonregistry acquisition sources. The phase still has no portable overlay disk quota and shares the Docker host kernel, so it belongs on a disposable runner.
 
 Preparation records:
 
@@ -56,6 +56,7 @@ Preparation records:
 2. SHA 256 of the generated dependency lockfile
 3. Runner image content ID and architecture
 4. Node, npm, and `strace` versions
+5. Acquisition network mode, policy version, allowed authority, and immutable proxy image ID
 
 The stopped preparation container is committed to a random temporary tag. Docker returns the committed content ID, and execution uses that immutable ID.
 

@@ -10,11 +10,37 @@ case "$mode" in
       echo "prepare mode must run as uid 65532" >&2
       exit 70
     fi
+    rm -f /tmp/behaviorlock-relay-ready
+    node /opt/behaviorlock/proxy-relay.mjs >/tmp/behaviorlock-relay.log 2>&1 &
+    relay_pid=$!
+    cleanup_relay() {
+      kill "$relay_pid" 2>/dev/null || true
+      wait "$relay_pid" 2>/dev/null || true
+    }
+    trap cleanup_relay EXIT
+    trap 'exit 130' HUP INT TERM
+    relay_ready=false
+    relay_attempt=0
+    while [ "$relay_attempt" -lt 100 ]; do
+      if [ -f /tmp/behaviorlock-relay-ready ]; then
+        relay_ready=true
+        break
+      fi
+      relay_attempt=$((relay_attempt + 1))
+      sleep 0.05
+    done
+    if [ "$relay_ready" != true ]; then
+      echo "acquisition proxy relay did not become ready" >&2
+      sed -n '1,20p' /tmp/behaviorlock-relay.log >&2
+      exit 71
+    fi
     cd /seed
     npm init --yes >/dev/null 2>&1
     npm install --ignore-scripts --save-exact --package-lock=true --no-audit --no-fund -- "$package_spec" >/tmp/behaviorlock-prepare.log 2>&1
     metadata="$(node /opt/behaviorlock/metadata.mjs "$package_spec")"
     printf 'BEHAVIORLOCK_PREP_V1 %s\n' "$metadata"
+    cleanup_relay
+    trap - EXIT HUP INT TERM
     ;;
   trace)
     if [ "$(id -u)" -ne 0 ]; then
@@ -67,12 +93,29 @@ case "$mode" in
     done
     printf '\nBEHAVIORLOCK_TRACE_END exit=%s\n' "$command_exit"
     ;;
+  proxy)
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "proxy supervisor must start as uid 0" >&2
+      exit 70
+    fi
+    chown 65532:65532 /proxy
+    chmod 0700 /proxy
+    exec setpriv \
+      --reuid=65532 \
+      --regid=65532 \
+      --clear-groups \
+      --inh-caps=-all \
+      --ambient-caps=-all \
+      --bounding-set=-all \
+      --no-new-privs \
+      node /opt/behaviorlock/proxy.mjs
+    ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \
       "$(node --version)" "$(npm --version)" "$(strace --version | sed -n '1s/^strace -- version //p')"
     ;;
   *)
-    echo "usage: entrypoint.sh prepare|trace|version package@version" >&2
+    echo "usage: entrypoint.sh prepare|trace|proxy|version package@version" >&2
     exit 64
     ;;
 esac

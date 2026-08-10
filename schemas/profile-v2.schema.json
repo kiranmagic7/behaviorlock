@@ -54,7 +54,7 @@
       "then": {
         "properties": {
           "subject": { "required": ["registryIntegrity", "dependencyLockSha256"] },
-          "capture": { "required": ["runnerImage", "runnerImageId", "architecture", "nodeVersion", "npmVersion", "straceVersion"] }
+          "capture": { "required": ["runnerImage", "runnerImageId", "architecture", "nodeVersion", "npmVersion", "straceVersion", "acquisition"] }
         }
       }
     }
@@ -115,6 +115,17 @@
       },
       "additionalProperties": false
     },
+    "acquisition": {
+      "type": "object",
+      "required": ["networkMode", "policyVersion", "allowedAuthority", "proxyRunnerImageId"],
+      "properties": {
+        "networkMode": { "const": "registry-proxy-unix" },
+        "policyVersion": { "const": "npm-registry-connect-v1" },
+        "allowedAuthority": { "const": "registry.npmjs.org:443" },
+        "proxyRunnerImageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
     "capture": {
       "type": "object",
       "required": ["networkMode", "sandboxProfile", "traceIntegrity", "attestation", "coverage", "experimental"],
@@ -131,6 +142,7 @@
         "attestation": { "const": "none" },
         "durationMillis": { "type": "integer", "minimum": 0 },
         "coverage": { "$ref": "#/$defs/coverage" },
+        "acquisition": { "$ref": "#/$defs/acquisition" },
         "evidenceArtifact": { "$ref": "#/$defs/evidenceArtifact" },
         "experimental": { "const": true }
       },
@@ -147,6 +159,11 @@
                   "scope": { "const": "registry-install-lifecycle" },
                   "lifecycle": { "minItems": 3, "maxItems": 3 },
                   "completeness": { "const": "partial" }
+                }
+              },
+              "acquisition": {
+                "properties": {
+                  "proxyRunnerImageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
                 }
               },
               "evidenceArtifact": {
@@ -168,6 +185,7 @@
                   "completeness": { "const": "unverified" }
                 }
               },
+              "acquisition": false,
               "evidenceArtifact": {
                 "properties": {
                   "retention": { "const": "external-unverified" },

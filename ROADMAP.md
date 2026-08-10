@@ -28,6 +28,8 @@ Every item below must pass on a GitHub hosted Linux runner:
 
 Gate 13 has a schema v2 implementation and local regression coverage. It remains a release gate until the hosted integration verifies companion creation, permissions, tamper rejection, and report references on the reviewed commit. No gate is considered closed solely because code exists on a feature branch.
 
+Gate 6 has a network-none preparation and exact-registry Unix-socket proxy implementation. It remains open until hosted integration proves direct public, private, metadata, and gateway denial; exact registry success; nonregistry rejection; unprivileged proxy runtime; and complete resource cleanup.
+
 ## Later options
 
 Only after the first gate passes:

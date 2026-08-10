@@ -25,6 +25,10 @@ func testProfile() Profile {
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
+	profile.Capture.Acquisition = &AcquisitionInfo{
+		NetworkMode: "registry-proxy-unix", PolicyVersion: "npm-registry-connect-v1",
+		AllowedAuthority: "registry.npmjs.org:443", ProxyRunnerImageID: profile.Capture.RunnerImageID,
+	}
 	profile.Result = Result{Status: "complete", ExitCode: 0}
 	profile.Behaviors = []Behavior{{
 		Type: "process.exec", Operation: "exec", Target: "/bin/true", Outcome: "success", Count: 1,
@@ -80,6 +84,24 @@ func TestStableDigestIgnoresCaptureNoiseAndEvidenceCoordinates(t *testing.T) {
 	}
 	if changedDigest == leftDigest {
 		t.Fatal("subject change did not change the stable digest")
+	}
+}
+
+func TestStableDigestIncludesAcquisitionPolicyFingerprint(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	right.Capture.Acquisition.PolicyVersion = "npm-registry-connect-v2"
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest == rightDigest {
+		t.Fatal("acquisition policy change did not change the stable digest")
 	}
 }
 
@@ -170,6 +192,11 @@ func TestValidateProfileRejectsMalformedAcquisitionEvidence(t *testing.T) {
 	profile.Capture.RunnerImageID = "behaviorlock-runner:mutable"
 	if err := ValidateProfile(profile); err == nil {
 		t.Fatal("mutable runner image reference unexpectedly validated as an ID")
+	}
+	profile = testProfile()
+	profile.Capture.Acquisition = nil
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("captured profile without an acquisition egress fingerprint unexpectedly validated")
 	}
 }
 

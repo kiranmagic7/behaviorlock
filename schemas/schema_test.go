@@ -22,6 +22,10 @@ func schemaProfile(version string, behaviors ...model.Behavior) model.Profile {
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
+	profile.Capture.Acquisition = &model.AcquisitionInfo{
+		NetworkMode: "registry-proxy-unix", PolicyVersion: "npm-registry-connect-v1",
+		AllowedAuthority: "registry.npmjs.org:443", ProxyRunnerImageID: profile.Capture.RunnerImageID,
+	}
 	profile.Result = model.Result{Status: "complete", ExitCode: 0}
 	harness := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/npm", Outcome: "success", Count: 1, SourceCall: "execve"}
 	profile.Behaviors = append([]model.Behavior{harness}, behaviors...)
@@ -86,6 +90,7 @@ func TestProfileSchemaAcceptsExternalUnverifiedProfile(t *testing.T) {
 	profile.Capture.Coverage.Scope = "external-strace"
 	profile.Capture.Coverage.Completeness = "unverified"
 	profile.Capture.Coverage.Lifecycle = []string{}
+	profile.Capture.Acquisition = nil
 	profile.Capture.EvidenceArtifact.Retention = "external-unverified"
 	profile.Capture.EvidenceArtifact.Envelope = "external-strace"
 	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err != nil {
@@ -99,6 +104,15 @@ func TestProfileSchemaRejectsEmptyCapturedLifecycle(t *testing.T) {
 	profile.Capture.Coverage.Lifecycle = []string{}
 	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
 		t.Fatal("schema accepted captured profile with empty lifecycle coverage")
+	}
+}
+
+func TestProfileSchemaRequiresCapturedAcquisitionFingerprint(t *testing.T) {
+	t.Parallel()
+	profile := schemaProfile("1.0.0")
+	profile.Capture.Acquisition = nil
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, profile)); err == nil {
+		t.Fatal("schema accepted a captured profile without acquisition controls")
 	}
 }
 

@@ -14,7 +14,7 @@ BehaviorLock observes one narrow execution path. The following limits are part o
 10. Failed access attempts remain observations and may create false positives.
 11. A comparable profile depends on the same runner image, architecture, Node version, npm version, and harness. The generated dependency lock digest records, but does not eliminate, dependency graph variation.
 12. The Debian base image is pinned, but live operating system packages installed during a runner build are not snapshot pinned. Use the exact runner image ID for comparison.
-13. The acquisition phase has a wall clock limit and memory controls but no portable Docker overlay disk quota. It also has registry network access, and dependency metadata can influence fetch destinations. Use a disposable runner with no route to private networks, cloud metadata, or trusted services.
+13. The acquisition phase has a wall clock limit and memory controls but no portable Docker overlay disk quota. Preparation has no direct network route and its proxy allows only the public npm registry authority, but registry data and the shared Docker host kernel remain trusted boundaries. Use a disposable runner without valuable credentials or workloads.
 14. Raw traces are retained by default in separate mode `0600` companion files and bound to normalized records by artifact and line digests. Retention improves reviewability but does not prove that the observed execution was complete or authentic.
 15. An incomplete trace is an error, but a complete trace still cannot prove full coverage or prevent evasive dormant behavior.
 16. Profiles and raw companions can retain sensitive paths, visible process arguments, and package controlled strings. Review every artifact before sharing it.

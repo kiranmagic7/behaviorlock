@@ -27,6 +27,7 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 | Full Docker integration | GitHub hosted Linux runner |
 | Native Windows or macOS tracing | Not supported |
 | Evidence integrity | Raw trace retained separately and verified by digest and line references |
+| Acquisition egress | Preparation has `--network none`; an exact-host proxy is reached through a private Unix socket |
 | Profile authenticity | Unsigned, not attested |
 | Tagged release | None |
 
@@ -65,9 +66,9 @@ compare two compatible profiles
 JSON, text, or Markdown report
 ```
 
-Preparation and execution are separate. Preparation needs registry access and runs with lifecycle scripts disabled. Execution starts from the prepared filesystem, has no network, uses a read only root filesystem, receives no host mounts or inherited credentials, and runs package code as uid `65532` with zero effective capabilities.
+Preparation and execution are separate. Preparation runs with lifecycle scripts disabled and Docker network mode `none`. Its only acquisition path is a loopback relay into a private Docker-volume Unix socket. The proxy sidecar accepts CONNECT only for `registry.npmjs.org:443`, rejects unsafe DNS answers, and dials the validated public address itself. Execution starts from the prepared filesystem, has no network, uses a read only root filesystem, receives no host mounts or inherited credentials, and runs package code as uid `65532` with zero effective capabilities.
 
-The preparation network is still a risk. Package metadata and transitive dependency metadata can influence what npm fetches. Use capture only on a disposable runner that cannot reach sensitive private networks or cloud metadata.
+The proxy does not make package acquisition trustworthy. Registry metadata and package archives remain untrusted, and the proxy shares the Docker host kernel. Use capture only on a disposable runner with no valuable credentials or workloads.
 
 ## Try the comparison without Docker
 
@@ -114,7 +115,7 @@ bin/behaviorlock capture \
   --output is-number.profile.json
 ```
 
-`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, and dependency lock digest. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
+`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, dependency lock digest, acquisition policy version, allowed authority, and proxy image ID. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
 
 Do not capture an unknown package on a machine that contains valuable data, credentials, trusted workloads, or access to private infrastructure.
 
@@ -186,6 +187,7 @@ The capture backend uses defense in depth:
 7. Immutable Docker content IDs for the runner and prepared package filesystem
 8. Required trace sentinels, completion evidence, and an empty tracer diagnostic channel
 9. Separate mode `0600` evidence artifacts whose full digest and referenced line digests are verified before comparison
+10. Preparation network mode `none`, with registry traffic crossing only a private Unix socket into an exact-authority proxy
 
 Containers still share a kernel. Package code can detect tracing, stay dormant, exploit a runtime vulnerability, or behave differently outside the harness. Profiles are unsigned JSON. `validate` checks structure, internal consistency, and retained raw evidence integrity; it does not verify who produced the artifacts.
 
@@ -197,12 +199,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 2. [Technical reference](docs/TECHNICAL_REFERENCE.md) documents the pipeline, data model, comparability rules, and failure behavior.
 3. [Platform support](docs/PLATFORM_SUPPORT.md) describes Linux, macOS, and Windows support.
 4. [Evidence model](docs/EVIDENCE_MODEL.md) defines retained artifacts, line references, validation, and privacy.
-5. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-6. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-7. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-8. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-9. [Roadmap](ROADMAP.md) contains the release gates.
-10. [Security policy](SECURITY.md) explains private vulnerability reporting.
+5. [Acquisition proxy](docs/ACQUISITION_PROXY.md) defines registry egress enforcement and its residual risks.
+6. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+7. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+8. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+9. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+10. [Roadmap](ROADMAP.md) contains the release gates.
+11. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 
@@ -221,7 +224,7 @@ The protected `ci-required` job runs race enabled tests, shell checks, schema ch
 
 ## Project status
 
-BehaviorLock is a public experiment with no tagged release. The parser and comparison core are usable now. The capture backend remains experimental until every adversarial gate in [ROADMAP.md](ROADMAP.md) passes, trusted profiles have verifiable provenance, and the acquisition network boundary is stronger.
+BehaviorLock is a public experiment with no tagged release. The parser and comparison core are usable now. The capture backend remains experimental until every adversarial gate in [ROADMAP.md](ROADMAP.md) passes and trusted profiles have verifiable provenance. The acquisition proxy implementation still needs hosted proof and review before gate 6 can close.
 
 Profiles and reports can retain sensitive paths and package controlled strings. Review every artifact before attaching it to an issue, publishing it, or committing it.
 

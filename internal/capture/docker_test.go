@@ -15,6 +15,8 @@ const (
 	testRunnerImageID     = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testPreparedImageID   = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testRegistryIntegrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	testPrepareOutput     = "BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"acquisitionPolicyVersion\":\"npm-registry-connect-v1\",\"allowedAuthority\":\"registry.npmjs.org:443\"}\n"
+	testProxyOutput       = "BEHAVIORLOCK_PROXY_READY_V1 npm-registry-connect-v1 registry.npmjs.org:443\nBEHAVIORLOCK_PROXY_V1 {\"decision\":\"allow\",\"reason\":\"npm-registry-connect-v1\",\"authority\":\"registry.npmjs.org:443\"}\n"
 )
 
 func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
@@ -40,17 +42,43 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 
 func TestPrepareArgumentsNeverMountHostPaths(t *testing.T) {
 	t.Parallel()
-	arguments := buildPrepareArgs("behaviorlock-prep-abc", testRunnerImageID, "safe-package@1.2.3")
+	arguments := buildPrepareArgs("behaviorlock-prep-abc", "behaviorlock-acq-socket-abc", testRunnerImageID, "safe-package@1.2.3")
 	for _, argument := range arguments {
 		if argument == "-v" || argument == "--volume" || strings.Contains(argument, "docker.sock") {
 			t.Fatalf("prepare arguments expose a host mount: %q", arguments)
 		}
 	}
-	if !strings.Contains(strings.Join(arguments, " "), "--user 65532:65532") {
+	joined := strings.Join(arguments, " ")
+	if !strings.Contains(joined, "--user 65532:65532") {
 		t.Fatalf("preparation must run as the nonroot package user: %q", arguments)
+	}
+	if !strings.Contains(joined, "--network none") || !strings.Contains(joined, "source=behaviorlock-acq-socket-abc,target=/proxy,readonly") {
+		t.Fatalf("preparation does not use network none and the read-only proxy socket: %q", arguments)
 	}
 	if arguments[len(arguments)-3] != testRunnerImageID {
 		t.Fatalf("preparation did not use the resolved runner image ID: %q", arguments)
+	}
+	assertAcquisitionProxyEnvironment(t, arguments)
+}
+
+func TestProxyArgumentsAreBoundedWithMinimalSupervisorCapabilities(t *testing.T) {
+	t.Parallel()
+	arguments := buildProxyArgs("behaviorlock-proxy-abc", "behaviorlock-acq-egress-abc", "behaviorlock-acq-socket-abc", testRunnerImageID)
+	joined := strings.Join(arguments, " ")
+	for _, required := range []string{
+		"--detach", "--network behaviorlock-acq-egress-abc",
+		"--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add CHOWN", "--cap-add SETUID", "--cap-add SETGID", "no-new-privileges:true",
+		"--pids-limit 64", "--memory 128m", "--cpus 0.5",
+		"source=behaviorlock-acq-socket-abc,target=/proxy,volume-nocopy",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("proxy arguments missing %q: %q", required, arguments)
+		}
+	}
+	for _, forbidden := range []string{"--privileged", "--network host", "/var/run/docker.sock", "NET_ADMIN", "NET_RAW", "SYS_ADMIN"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("proxy arguments contain forbidden value %q: %q", forbidden, arguments)
+		}
 	}
 	assertProxyEnvironmentScrubbed(t, arguments)
 }
@@ -61,6 +89,21 @@ func assertProxyEnvironmentScrubbed(t *testing.T, arguments []string) {
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
 		if !strings.Contains(joined, "--env "+name+"=") {
 			t.Fatalf("docker arguments did not clear %s: %q", name, arguments)
+		}
+	}
+}
+
+func assertAcquisitionProxyEnvironment(t *testing.T, arguments []string) {
+	t.Helper()
+	joined := strings.Join(arguments, " ")
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "npm_config_proxy", "npm_config_https_proxy"} {
+		if !strings.Contains(joined, "--env "+name+"="+acquisitionProxyAddress) {
+			t.Fatalf("preparation did not pin %s to the internal proxy: %q", name, arguments)
+		}
+	}
+	for _, name := range []string{"ALL_PROXY", "NO_PROXY", "all_proxy", "no_proxy"} {
+		if !strings.Contains(joined, "--env "+name+"=") {
+			t.Fatalf("preparation did not clear %s: %q", name, arguments)
 		}
 	}
 }
@@ -78,12 +121,26 @@ func TestBoundedBufferReportsTruncation(t *testing.T) {
 
 func TestParsePrepareMetadata(t *testing.T) {
 	t.Parallel()
-	metadata, err := parsePrepareMetadata([]byte("noise\nBEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n"))
+	metadata, err := parsePrepareMetadata([]byte("noise\nBEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"acquisitionPolicyVersion\":\"npm-registry-connect-v1\",\"allowedAuthority\":\"registry.npmjs.org:443\"}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if metadata.Integrity != testRegistryIntegrity {
 		t.Fatalf("integrity = %q", metadata.Integrity)
+	}
+}
+
+func TestAcquisitionProxyAuditRejectsAnyDeniedRequest(t *testing.T) {
+	t.Parallel()
+	runner := &DockerRunner{dockerPath: "docker"}
+	runner.run = func(_ context.Context, arguments []string, _, _ int64) (commandResult, error) {
+		if arguments[0] != "logs" {
+			t.Fatalf("unexpected docker arguments: %q", arguments)
+		}
+		return commandResult{Stdout: []byte("BEHAVIORLOCK_PROXY_V1 {\"decision\":\"deny\",\"reason\":\"authority_not_allowed\",\"authority\":\"attacker.invalid:443\"}\n")}, nil
+	}
+	if err := runner.verifyAcquisitionProxyAudit(context.Background(), "behaviorlock-proxy-test"); err == nil {
+		t.Fatal("denied acquisition request unexpectedly passed the audit")
 	}
 }
 
@@ -104,13 +161,28 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 				t.Fatalf("prepare used mutable runner reference: %q", arguments)
 			}
 			return commandResult{}, nil
+		case "network":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("network-id\n")}, nil
+			}
+			return commandResult{}, nil
+		case "volume":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("volume-name\n")}, nil
+			}
+			return commandResult{}, nil
+		case "logs":
+			return commandResult{Stdout: []byte(testProxyOutput)}, nil
 		case "rm":
 			return commandResult{}, nil
 		case "commit":
 			return commandResult{Stdout: []byte(testPreparedImageID + "\n")}, nil
 		case "start":
-			return commandResult{Stdout: []byte("BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")}, nil
+			return commandResult{Stdout: []byte(testPrepareOutput)}, nil
 		case "run":
+			if arguments[len(arguments)-1] == "proxy" {
+				return commandResult{Stdout: []byte("proxy-container-id\n")}, nil
+			}
 			if arguments[len(arguments)-1] == "version" {
 				if arguments[len(arguments)-2] != testRunnerImageID {
 					t.Fatalf("version probe used mutable runner reference: %q", arguments)
@@ -146,6 +218,12 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 	if err := model.VerifyEvidence(profile, rawEvidence); err != nil {
 		t.Fatalf("retained capture evidence did not verify: %v", err)
 	}
+	if err := model.ValidateProfile(profile); err != nil {
+		t.Fatalf("captured profile did not validate: %v", err)
+	}
+	if profile.Capture.Acquisition == nil || profile.Capture.Acquisition.NetworkMode != "registry-proxy-unix" {
+		t.Fatalf("capture omitted acquisition fingerprint: %#v", profile.Capture.Acquisition)
+	}
 }
 
 func TestCaptureRejectsMissingTraceFooter(t *testing.T) {
@@ -159,11 +237,26 @@ func TestCaptureRejectsMissingTraceFooter(t *testing.T) {
 			return commandResult{Stdout: []byte(`{"Id":"` + testRunnerImageID + `","Architecture":"amd64"}`)}, nil
 		case "create", "rm":
 			return commandResult{}, nil
+		case "network":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("network-id\n")}, nil
+			}
+			return commandResult{}, nil
+		case "volume":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("volume-name\n")}, nil
+			}
+			return commandResult{}, nil
+		case "logs":
+			return commandResult{Stdout: []byte(testProxyOutput)}, nil
 		case "commit":
 			return commandResult{Stdout: []byte(testPreparedImageID + "\n")}, nil
 		case "start":
-			return commandResult{Stdout: []byte("BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")}, nil
+			return commandResult{Stdout: []byte(testPrepareOutput)}, nil
 		case "run":
+			if arguments[len(arguments)-1] == "proxy" {
+				return commandResult{Stdout: []byte("proxy-container-id\n")}, nil
+			}
 			if arguments[len(arguments)-1] == "version" {
 				return commandResult{Stdout: []byte("{\"node\":\"v22.1.0\",\"npm\":\"10.8.0\",\"strace\":\"6.1\"}\n")}, nil
 			}
@@ -212,11 +305,26 @@ func TestCaptureRejectsCommitWithoutContentID(t *testing.T) {
 			return commandResult{Stdout: []byte(`{"Id":"` + testRunnerImageID + `","Architecture":"amd64"}`)}, nil
 		case "create", "rm":
 			return commandResult{}, nil
+		case "network":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("network-id\n")}, nil
+			}
+			return commandResult{}, nil
+		case "volume":
+			if arguments[1] == "create" {
+				return commandResult{Stdout: []byte("volume-name\n")}, nil
+			}
+			return commandResult{}, nil
+		case "logs":
+			return commandResult{Stdout: []byte(testProxyOutput)}, nil
 		case "start":
-			return commandResult{Stdout: []byte("BEHAVIORLOCK_PREP_V1 {\"integrity\":\"" + testRegistryIntegrity + "\",\"dependencyLockSha256\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")}, nil
+			return commandResult{Stdout: []byte(testPrepareOutput)}, nil
 		case "commit":
 			return commandResult{Stdout: []byte("behaviorlock-analysis:mutable\n")}, nil
 		case "run":
+			if arguments[len(arguments)-1] == "proxy" {
+				return commandResult{Stdout: []byte("proxy-container-id\n")}, nil
+			}
 			return commandResult{Stdout: []byte("{\"node\":\"v22.1.0\",\"npm\":\"10.8.0\",\"strace\":\"6.1\"}\n")}, nil
 		default:
 			return commandResult{}, nil

@@ -20,10 +20,13 @@ import (
 )
 
 const (
-	RunnerImage       = "behaviorlock-runner:dev"
-	SandboxProfile    = "behaviorlock-linux-npm-v1"
-	maxPreparationLog = 4 << 20
-	maxTraceStream    = trace.MaxTraceBytes + (1 << 20)
+	RunnerImage             = "behaviorlock-runner:dev"
+	SandboxProfile          = "behaviorlock-linux-npm-v1"
+	AcquisitionPolicy       = "npm-registry-connect-v1"
+	AcquisitionAuthority    = "registry.npmjs.org:443"
+	acquisitionProxyAddress = "http://127.0.0.1:8080"
+	maxPreparationLog       = 4 << 20
+	maxTraceStream          = trace.MaxTraceBytes + (1 << 20)
 )
 
 type Config struct {
@@ -32,8 +35,10 @@ type Config struct {
 }
 
 type PrepareMetadata struct {
-	Integrity            string `json:"integrity"`
-	DependencyLockSHA256 string `json:"dependencyLockSha256"`
+	Integrity                string `json:"integrity"`
+	DependencyLockSHA256     string `json:"dependencyLockSha256"`
+	AcquisitionPolicyVersion string `json:"acquisitionPolicyVersion"`
+	AllowedAuthority         string `json:"allowedAuthority"`
 }
 
 type RunnerMetadata struct {
@@ -57,6 +62,19 @@ type commandResult struct {
 	Stderr    []byte
 	Truncated bool
 	ExitCode  int
+}
+
+type cleanupTargets struct {
+	containers []string
+	images     []string
+	volumes    []string
+	networks   []string
+}
+
+type proxyAudit struct {
+	Decision  string `json:"decision"`
+	Reason    string `json:"reason"`
+	Authority string `json:"authority"`
 }
 
 func NewDockerRunner() (*DockerRunner, error) {
@@ -110,8 +128,16 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	}
 	prepContainer := "behaviorlock-prep-" + runID
 	traceContainer := "behaviorlock-trace-" + runID
+	proxyContainer := "behaviorlock-proxy-" + runID
 	temporaryImage := "behaviorlock-analysis:" + runID
-	defer runner.cleanup(prepContainer, traceContainer, temporaryImage)
+	egressNetwork := "behaviorlock-acq-egress-" + runID
+	proxyVolume := "behaviorlock-acq-socket-" + runID
+	defer runner.cleanup(cleanupTargets{
+		containers: []string{prepContainer, traceContainer, proxyContainer},
+		images:     []string{temporaryImage},
+		volumes:    []string{proxyVolume},
+		networks:   []string{egressNetwork},
+	})
 
 	runnerImageID, architecture, err := runner.imageDetails(captureContext, RunnerImage)
 	if err != nil {
@@ -126,8 +152,17 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	profile.Capture.NodeVersion = runnerMetadata.Node
 	profile.Capture.NPMVersion = runnerMetadata.NPM
 	profile.Capture.StraceVersion = runnerMetadata.Strace
+	if err := runner.startAcquisitionProxy(captureContext, proxyContainer, egressNetwork, proxyVolume, runnerImageID); err != nil {
+		return withoutEvidence(timedOutProfile(profile, captureContext, err))
+	}
+	profile.Capture.Acquisition = &model.AcquisitionInfo{
+		NetworkMode:        "registry-proxy-unix",
+		PolicyVersion:      AcquisitionPolicy,
+		AllowedAuthority:   AcquisitionAuthority,
+		ProxyRunnerImageID: runnerImageID,
+	}
 
-	prepareArgs := buildPrepareArgs(prepContainer, runnerImageID, spec.String())
+	prepareArgs := buildPrepareArgs(prepContainer, proxyVolume, runnerImageID, spec.String())
 	created, err := runner.run(captureContext, prepareArgs, 64<<10, maxPreparationLog)
 	if err != nil || created.ExitCode != 0 {
 		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("create preparation container: %s", safeDiagnostic(created.Stderr))))
@@ -135,6 +170,9 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	prepared, err := runner.run(captureContext, []string{"start", "--attach", prepContainer}, maxPreparationLog, maxPreparationLog)
 	if err != nil || prepared.ExitCode != 0 || prepared.Truncated {
 		return withoutEvidence(timedOutProfile(profile, captureContext, fmt.Errorf("prepare package without lifecycle scripts: %s", safeDiagnostic(prepared.Stderr))))
+	}
+	if err := runner.verifyAcquisitionProxyAudit(captureContext, proxyContainer); err != nil {
+		return profile, nil, err
 	}
 	metadata, err := parsePrepareMetadata(prepared.Stdout)
 	if err != nil {
@@ -150,7 +188,9 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if !validSHA256(preparedImageID) {
 		return profile, nil, errors.New("committed preparation image did not resolve to a content ID")
 	}
-	_, _ = runner.run(captureContext, []string{"rm", "--force", prepContainer}, 64<<10, 64<<10)
+	if err := runner.retireAcquisition(captureContext, prepContainer, proxyContainer, proxyVolume, egressNetwork); err != nil {
+		return profile, nil, err
+	}
 
 	started := time.Now()
 	traced, runErr := runner.run(captureContext, buildTraceArgs(traceContainer, preparedImageID, spec.String()), maxTraceStream, 1<<20)
@@ -189,11 +229,11 @@ func withoutEvidence(profile model.Profile, err error) (model.Profile, []byte, e
 	return profile, nil, err
 }
 
-func buildPrepareArgs(containerName, runnerImageID, packageSpec string) []string {
+func buildPrepareArgs(containerName, proxyVolume, runnerImageID, packageSpec string) []string {
 	arguments := []string{
 		"create",
 		"--name", containerName,
-		"--network", "bridge",
+		"--network", "none",
 		"--user", "65532:65532",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
@@ -206,15 +246,44 @@ func buildPrepareArgs(containerName, runnerImageID, packageSpec string) []string
 		"--ulimit", "core=0:0",
 		"--shm-size", "16m",
 		"--ipc", "none",
+		"--mount", "type=volume,source=" + proxyVolume + ",target=/proxy,readonly,volume-nocopy",
 		"--env", "HOME=/home/scanner",
 		"--env", "npm_config_cache=/seed/.npm-cache",
 		"--env", "npm_config_userconfig=/dev/null",
 		"--env", "npm_config_audit=false",
 		"--env", "npm_config_fund=false",
 		"--env", "npm_config_update_notifier=false",
+		"--env", "npm_config_registry=https://registry.npmjs.org/",
+		"--env", "npm_config_strict_ssl=true",
+	}
+	arguments = appendAcquisitionProxyEnvironment(arguments)
+	return append(arguments, runnerImageID, "prepare", packageSpec)
+}
+
+func buildProxyArgs(containerName, networkName, proxyVolume, runnerImageID string) []string {
+	arguments := []string{
+		"run", "--detach",
+		"--name", containerName,
+		"--network", networkName,
+		"--read-only",
+		"--user", "0:0",
+		"--cap-drop", "ALL",
+		"--cap-add", "CHOWN",
+		"--cap-add", "SETUID",
+		"--cap-add", "SETGID",
+		"--security-opt", "no-new-privileges:true",
+		"--pids-limit", "64",
+		"--memory", "128m",
+		"--memory-swap", "128m",
+		"--cpus", "0.5",
+		"--ulimit", "nofile=256:256",
+		"--ulimit", "nproc=64:64",
+		"--ulimit", "core=0:0",
+		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700",
+		"--mount", "type=volume,source=" + proxyVolume + ",target=/proxy,volume-nocopy",
 	}
 	arguments = appendScrubbedProxyEnvironment(arguments)
-	return append(arguments, runnerImageID, "prepare", packageSpec)
+	return append(arguments, runnerImageID, "proxy")
 }
 
 func buildTraceArgs(containerName, image, packageSpec string) []string {
@@ -262,6 +331,104 @@ func appendScrubbedProxyEnvironment(arguments []string) []string {
 	return arguments
 }
 
+func appendAcquisitionProxyEnvironment(arguments []string) []string {
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		arguments = append(arguments, "--env", name+"="+acquisitionProxyAddress)
+	}
+	for _, name := range []string{"ALL_PROXY", "NO_PROXY", "all_proxy", "no_proxy"} {
+		arguments = append(arguments, "--env", name+"=")
+	}
+	arguments = append(arguments,
+		"--env", "npm_config_proxy="+acquisitionProxyAddress,
+		"--env", "npm_config_https_proxy="+acquisitionProxyAddress,
+	)
+	return arguments
+}
+
+func (runner *DockerRunner) startAcquisitionProxy(ctx context.Context, containerName, egressNetwork, proxyVolume, runnerImageID string) error {
+	createdNetwork, err := runner.run(ctx, []string{"network", "create", "--driver", "bridge", egressNetwork}, 64<<10, 64<<10)
+	if err != nil || createdNetwork.ExitCode != 0 || strings.TrimSpace(string(createdNetwork.Stdout)) == "" {
+		return fmt.Errorf("create acquisition egress network: %s", safeDiagnostic(createdNetwork.Stderr))
+	}
+	createdVolume, err := runner.run(ctx, []string{"volume", "create", "--driver", "local", proxyVolume}, 64<<10, 64<<10)
+	if err != nil || createdVolume.ExitCode != 0 || strings.TrimSpace(string(createdVolume.Stdout)) == "" {
+		return fmt.Errorf("create acquisition socket volume: %s", safeDiagnostic(createdVolume.Stderr))
+	}
+	started, err := runner.run(ctx, buildProxyArgs(containerName, egressNetwork, proxyVolume, runnerImageID), 64<<10, 64<<10)
+	if err != nil || started.ExitCode != 0 || strings.TrimSpace(string(started.Stdout)) == "" {
+		return fmt.Errorf("start acquisition proxy: %s", safeDiagnostic(started.Stderr))
+	}
+	readyContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		logs, logErr := runner.run(readyContext, []string{"logs", containerName}, 64<<10, 64<<10)
+		if logErr == nil && logs.ExitCode == 0 && strings.Contains(string(logs.Stdout), "BEHAVIORLOCK_PROXY_READY_V1 "+AcquisitionPolicy+" "+AcquisitionAuthority) {
+			return nil
+		}
+		select {
+		case <-readyContext.Done():
+			return fmt.Errorf("acquisition proxy did not become ready: %s", safeDiagnostic(logs.Stderr))
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func (runner *DockerRunner) verifyAcquisitionProxyAudit(ctx context.Context, containerName string) error {
+	logs, err := runner.run(ctx, []string{"logs", containerName}, maxPreparationLog, 64<<10)
+	if err != nil || logs.ExitCode != 0 || logs.Truncated || len(bytes.TrimSpace(logs.Stderr)) != 0 {
+		return fmt.Errorf("read acquisition proxy audit: %s", safeDiagnostic(logs.Stderr))
+	}
+	allowed := false
+	for _, line := range strings.Split(string(logs.Stdout), "\n") {
+		const prefix = "BEHAVIORLOCK_PROXY_V1 "
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		var event proxyAudit
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &event); err != nil {
+			return fmt.Errorf("decode acquisition proxy audit: %w", err)
+		}
+		if event.Decision == "deny" {
+			return fmt.Errorf("acquisition proxy denied a nonregistry or unsafe request: %s", safeDiagnostic([]byte(event.Reason)))
+		}
+		if event.Decision == "allow" && event.Reason == AcquisitionPolicy && event.Authority == AcquisitionAuthority {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return errors.New("acquisition proxy did not record an allowed registry tunnel")
+	}
+	return nil
+}
+
+func (runner *DockerRunner) retireAcquisition(ctx context.Context, preparationContainer, proxyContainer, proxyVolume, egressNetwork string) error {
+	for _, target := range []struct {
+		label     string
+		arguments []string
+	}{
+		{label: "preparation container", arguments: []string{"rm", "--force", preparationContainer}},
+		{label: "proxy container", arguments: []string{"rm", "--force", proxyContainer}},
+	} {
+		result, err := runner.run(ctx, target.arguments, 64<<10, 64<<10)
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("remove acquisition %s: %s", target.label, safeDiagnostic(result.Stderr))
+		}
+	}
+	for _, target := range []struct {
+		label     string
+		arguments []string
+	}{
+		{label: "socket volume", arguments: []string{"volume", "rm", "--force", proxyVolume}},
+		{label: "egress network", arguments: []string{"network", "rm", egressNetwork}},
+	} {
+		result, err := runner.run(ctx, target.arguments, 64<<10, 64<<10)
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("remove acquisition %s: %s", target.label, safeDiagnostic(result.Stderr))
+		}
+	}
+	return nil
+}
+
 func (runner *DockerRunner) imageDetails(ctx context.Context, image string) (string, string, error) {
 	result, err := runner.run(ctx, []string{"image", "inspect", image, "--format", "{{json .}}"}, 64<<10, 64<<10)
 	if err != nil || result.ExitCode != 0 {
@@ -301,18 +468,32 @@ func (runner *DockerRunner) runnerMetadata(ctx context.Context, runnerImageID st
 	return metadata, nil
 }
 
-func (runner *DockerRunner) cleanup(containers ...string) {
+func (runner *DockerRunner) cleanup(targets cleanupTargets) {
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	for index, value := range containers {
+	for _, value := range targets.containers {
 		if value == "" {
 			continue
 		}
-		if index < 2 {
-			_, _ = runner.run(cleanupContext, []string{"rm", "--force", value}, 64<<10, 64<<10)
+		_, _ = runner.run(cleanupContext, []string{"rm", "--force", value}, 64<<10, 64<<10)
+	}
+	for _, value := range targets.images {
+		if value == "" {
 			continue
 		}
 		_, _ = runner.run(cleanupContext, []string{"image", "rm", "--force", value}, 64<<10, 64<<10)
+	}
+	for _, value := range targets.volumes {
+		if value == "" {
+			continue
+		}
+		_, _ = runner.run(cleanupContext, []string{"volume", "rm", "--force", value}, 64<<10, 64<<10)
+	}
+	for _, value := range targets.networks {
+		if value == "" {
+			continue
+		}
+		_, _ = runner.run(cleanupContext, []string{"network", "rm", value}, 64<<10, 64<<10)
 	}
 }
 
@@ -352,6 +533,9 @@ func parsePrepareMetadata(output []byte) (PrepareMetadata, error) {
 		}
 		if !validSHA256(metadata.DependencyLockSHA256) {
 			return PrepareMetadata{}, errors.New("dependency lock digest is missing or invalid")
+		}
+		if metadata.AcquisitionPolicyVersion != AcquisitionPolicy || metadata.AllowedAuthority != AcquisitionAuthority {
+			return PrepareMetadata{}, errors.New("preparation acquisition policy marker is missing or invalid")
 		}
 		return metadata, nil
 	}

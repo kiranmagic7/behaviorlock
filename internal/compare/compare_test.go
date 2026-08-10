@@ -19,6 +19,10 @@ func completeProfile(version string, behaviors ...model.Behavior) model.Profile 
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
+	profile.Capture.Acquisition = &model.AcquisitionInfo{
+		NetworkMode: "registry-proxy-unix", PolicyVersion: "npm-registry-connect-v1",
+		AllowedAuthority: "registry.npmjs.org:443", ProxyRunnerImageID: profile.Capture.RunnerImageID,
+	}
 	profile.Result = model.Result{Status: "complete", ExitCode: 0}
 	harness := model.Behavior{Type: "process.exec", Operation: "exec", Target: "/usr/bin/npm", Outcome: "success", Count: 1, SourceCall: "execve"}
 	profile.Behaviors = append([]model.Behavior{harness}, behaviors...)
@@ -86,6 +90,7 @@ func TestProfilesRequireExplicitExternalAcknowledgement(t *testing.T) {
 		profile.Capture.Coverage.Scope = "external-strace"
 		profile.Capture.Coverage.Completeness = "unverified"
 		profile.Capture.Coverage.Lifecycle = []string{}
+		profile.Capture.Acquisition = nil
 		profile.Capture.EvidenceArtifact.Retention = "external-unverified"
 		profile.Capture.EvidenceArtifact.Envelope = "external-strace"
 		profile.Subject.RegistryIntegrity = ""

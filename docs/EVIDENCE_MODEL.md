@@ -48,7 +48,7 @@ Successful validation proves profile-to-artifact consistency. It does not authen
 
 ## Stable digest and compatibility
 
-The stable profile digest excludes duration, evidence artifact metadata, raw line references, and repeat counts. These fields can change between equivalent captures without changing the meaning of the normalized behavior set.
+The stable profile digest excludes duration, evidence artifact metadata, raw line references, and repeat counts. These fields can change between equivalent captures without changing the meaning of the normalized behavior set. Acquisition policy, allowed authority, and immutable proxy image identity remain in the digest because a changed egress boundary changes the meaning of a capture.
 
 Schema v1 remains published as a historical contract. The current CLI writes schema v2 and refuses cross-version comparison. Regenerate historical profiles with the current capture contract rather than silently discarding their missing evidence guarantees.
 
