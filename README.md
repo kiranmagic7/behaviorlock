@@ -1,8 +1,8 @@
 # BehaviorLock
 
-BehaviorLock shows how the observed install behavior of an npm package changes between two exact versions.
+BehaviorLock shows how behavior observed during one bounded npm package phase changes between two exact versions. Offline install lifecycle observation is the default; entry-point import observation is an explicit experiment.
 
-Source review and vulnerability databases answer important questions about a dependency update. BehaviorLock asks another one: did the new version begin reading a credential path, starting a shell, changing files, or attempting a network connection when its install scripts ran?
+Source review and vulnerability databases answer important questions about a dependency update. BehaviorLock asks another one: did the new version begin reading a credential path, starting a shell, changing files, or attempting a network connection during the selected bounded phase?
 
 It records selected Linux system calls from both versions, normalizes the results, and produces a diff that a person can inspect or a CI job can evaluate.
 
@@ -22,7 +22,7 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 | Maturity | Public experiment, `0.1.0-dev` |
 | Package ecosystem | Public npm registry packages |
 | Version input | Exact semantic versions only |
-| Observed environment | Linux container install lifecycle |
+| Observed environment | Linux container install lifecycle; optional experimental package import |
 | CLI build and unit tests | Linux and macOS |
 | Full Docker integration | GitHub hosted Linux runner |
 | Native Windows or macOS tracing | Not supported |
@@ -40,8 +40,10 @@ The current parser records a bounded subset of:
 3. Socket creation, connection, UDP/DNS send, bind, listen, and acceptance attempts
 4. Selected clock inspection and requested delay calls
 5. Whether an observed call succeeded, failed, or was blocked, with bounded process, parent, descriptor, and attribution context
+6. Exact movement of generated nonsecret canaries when visible in an already observed process argument, filesystem target, or bounded sinkhole request
+7. Selected observed-order sequences grouped without retaining runtime PIDs in their stable identity
 
-The capture path exercises npm `preinstall`, `install`, and `postinstall` scripts through `npm rebuild`. It does not observe normal application runtime behavior.
+The default capture path exercises npm `preinstall`, `install`, and `postinstall` scripts through `npm rebuild`. `--phase import` instead loads the resolved CommonJS or ESM package entry point and produces a separate, non-comparable coverage scope. Neither mode observes total application runtime behavior.
 
 ## How it works
 
@@ -55,7 +57,7 @@ prepare without lifecycle scripts
 resolve immutable package filesystem
        |
        v
-run lifecycle offline under strace
+run the selected phase offline under strace
        |
        v
 retain evidence, validate, and normalize a profile
@@ -67,7 +69,7 @@ compare two compatible profiles
 JSON, text, or Markdown report
 ```
 
-Preparation and execution are separate. Preparation runs with lifecycle scripts disabled and Docker network mode `none`. Its only acquisition path is a loopback relay into a private Docker-volume Unix socket. The proxy sidecar accepts CONNECT only for `registry.npmjs.org:443`, rejects unsafe DNS answers, and dials the validated public address itself. Execution starts from the prepared filesystem, has no network, uses a read only root filesystem, receives no host mounts or inherited credentials, and runs package code as uid `65532` with zero effective capabilities.
+Preparation and execution are separate. Preparation runs with lifecycle scripts disabled and Docker network mode `none`. Its only acquisition path is a loopback relay into a private Docker-volume Unix socket. The proxy sidecar accepts CONNECT only for `registry.npmjs.org:443`, rejects unsafe DNS answers, and dials the validated public address itself. Execution starts from the prepared filesystem, uses a read only root filesystem, receives no host mounts or inherited credentials, and runs package code as uid `65532` with zero effective capabilities. Execution is offline by default. The optional sinkhole shares only an unrouted loopback namespace and returns fixed inert responses.
 
 The proxy does not make package acquisition trustworthy. Registry metadata and package archives remain untrusted, and the proxy shares the Docker host kernel. Use capture only on a disposable runner with no valuable credentials or workloads.
 
@@ -113,17 +115,20 @@ bin/behaviorlock capture \
   --experimental \
   --runner behaviorlock-runner:dev \
   --package is-number@7.0.0 \
+  --phase lifecycle \
   --timeout 2m \
   --output is-number.profile.json
 ```
 
-`--experimental` is mandatory. `--runner` must name an explicit non-`latest` tag, local content ID, or `@sha256` digest reference. The command records that reference, its resolved image ID, architecture, Node version, npm version, `strace` version, package registry integrity, dependency lock digest, acquisition policy version, allowed authority, and proxy image ID. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses the immutable image ID after resolution so a mutable local tag cannot silently change the captured environment.
+`--experimental` is mandatory. `--runner` must name an explicit non-`latest` tag, local content ID, or `@sha256` digest reference. The command records that reference, its resolved image ID, architecture, Node version, npm version, `strace` version, package registry integrity, dependency lock digest, acquisition policy version, allowed authority, phase, and proxy image ID. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses the immutable image ID after resolution so a mutable local tag cannot silently change the captured environment.
+
+To observe first import separately, select `--phase import`. Add `--sinkhole` only when a fixed inert loopback responder is useful. Both are experimental; neither changes the offline lifecycle default. See [canary, import, and sinkhole observations](docs/CANARY_IMPORT_AND_SINKHOLE.md).
 
 Do not capture an unknown package on a machine that contains valuable data, credentials, trusted workloads, or access to private infrastructure.
 
 ## Compare two captured versions
 
-Both profiles must describe the same package and use the same runner image reference and ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, coverage scope, and observation policy. Their companion evidence files must be present beside the profiles, or supplied with `--baseline-evidence` and `--candidate-evidence`.
+Both profiles must describe the same package and use the same phase, runner image reference and ID, architecture, Node version, npm version, `strace` version, network mode, sinkhole policy when present, sandbox profile, coverage scope, and observation policy. Lifecycle and import profiles are rejected as incomparable. Their companion evidence files must be present beside the profiles, or supplied with `--baseline-evidence` and `--candidate-evidence`.
 
 ```bash
 bin/behaviorlock compare \
@@ -141,9 +146,9 @@ The default threshold is `high`. Exit code `1` means an added observation reache
 | Rule | Level | Meaning |
 | --- | --- | --- |
 | `BL100` | Critical | New access to a common credential or secret path |
-| `BL200` | High | New network connection attempt during offline execution |
-| `BL201` | High | New network send attempt during offline execution |
-| `BL202` | High | New network send to port 53 during offline execution; payload not decoded |
+| `BL200` | High | New network connection attempt during the selected phase |
+| `BL201` | High | New network send attempt during the selected phase |
+| `BL202` | High | New network send to port 53 during the selected phase; payload not decoded |
 | `BL203` | High | New bind or listener setup |
 | `BL204` | Medium | New inbound acceptance attempt |
 | `BL205` | Low | New socket creation |
@@ -165,13 +170,13 @@ The default threshold is `high`. Exit code `1` means an added observation reache
 
 The complete versioned registry and attribution rules are in [review rules](docs/RULES.md).
 
-The report exposes `reviewRequired` and `highestReviewLevel`; it does not issue a package verdict. The CLI threshold controls only the process exit code. No observed addition, or an exit code of `0`, authenticates the profiles, establishes full coverage, or proves safety.
+The report exposes `reviewRequired` and `highestReviewLevel`; it does not issue a package verdict. An added observed sequence also requires review, but a sequence-only change keeps `highestReviewLevel: none` because ordering context receives no invented level. The CLI threshold controls only the process exit code. No observed addition, or an exit code of `0`, authenticates the profiles, establishes full coverage, or proves safety.
 
 ## Command reference
 
 ```text
 behaviorlock doctor [--runner image:tag-or-digest]
-behaviorlock capture --experimental --runner image:tag-or-digest --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
+behaviorlock capture --experimental --runner image:tag-or-digest --package name@1.2.3 --output profile.json [--phase lifecycle|import] [--sinkhole] [--evidence-output raw.strace]
 behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json [--evidence-output retained.strace]
 behaviorlock compare --baseline old.json --candidate new.json --output report.json [--baseline-evidence old.strace --candidate-evidence new.strace]
 behaviorlock validate --profile profile.json [--evidence raw.strace]
@@ -199,7 +204,7 @@ The capture backend uses defense in depth:
 1. Strict package input validation before Docker runs
 2. Docker argument arrays instead of host shell interpolation
 3. No host mounts, Docker socket, inherited home directory, inherited credentials, or Docker client proxy variables
-4. Offline lifecycle execution and a read only root filesystem
+4. Offline selected-phase execution by default and a read only root filesystem
 5. Bounded memory, CPU, processes, descriptors, temporary storage, output, and wall clock time
 6. A root owned trace directory that package code cannot read or modify
 7. Immutable Docker content IDs for the runner and prepared package filesystem
@@ -221,12 +226,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 6. [Provenance and releases](docs/PROVENANCE_AND_RELEASES.md) defines trusted bundles, proof collection, SBOMs, signing, and disabled publication controls.
 7. [Review rules](docs/RULES.md) defines the versioned rule registry, precedence, and attribution boundaries.
 8. [Resource boundaries and repeatability](docs/RESOURCE_AND_REPEATABILITY.md) defines exhaustion outcomes, cleanup, and the ten-run semantic stability gate.
-9. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-10. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-11. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-12. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-13. [Roadmap](ROADMAP.md) contains the release gates.
-14. [Security policy](SECURITY.md) explains private vulnerability reporting.
+9. [Canary, import, and sinkhole observations](docs/CANARY_IMPORT_AND_SINKHOLE.md) defines the optional observation modes and their privacy boundary.
+10. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+11. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+12. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+13. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+14. [Roadmap](ROADMAP.md) contains the release gates.
+15. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 

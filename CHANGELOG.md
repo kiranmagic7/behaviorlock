@@ -29,6 +29,11 @@ All notable changes will be documented here. The project follows Keep a Changelo
 21. Distinct timeout, cancellation, signal, truncation, and authoritative Docker OOM result mapping
 22. Inert resource-boundary and real-tracer-death fixtures with cleanup assertions
 23. Ten-run semantic repeatability check that reports raw and count variance without suppression
+24. Distinct generated nonsecret canaries for disposable credential-file and environment locations
+25. Bounded first-seen observation sequences grouped by process lineage
+26. Explicit CommonJS or ESM entry-point import observation with unsupported outcomes
+27. Optional no-route loopback sinkhole with fixed DNS, HTTP, and TCP responses
+28. Schema v3 contracts for phase, canary, sequence, import, sinkhole, and optional ATT&CK context metadata
 
 ### Changed
 
@@ -38,6 +43,9 @@ All notable changes will be documented here. The project follows Keep a Changelo
 4. Profile compatibility now requires the same explicit observation-policy version.
 5. Capture retains per-process trace identity for review without making runtime identifiers part of semantic behavior identity or the stable digest.
 6. Execution now applies a 64 MiB per-file limit in addition to existing process, memory, descriptor, tmpfs, output, syscall, and wall-clock bounds.
+7. Current profile and diff kinds are phase-neutral: `npm.observation.profile` and `npm.observation.diff`.
+8. Comparison now rejects cross-phase profiles and requires human review for an added observed sequence without inventing a review level.
+9. Network rule descriptions now refer to the selected observation phase rather than assuming lifecycle-only execution.
 
 ### Security
 
@@ -53,3 +61,5 @@ All notable changes will be documented here. The project follows Keep a Changelo
 10. Protected main DCO verification recognizes GitHub created squash identities without relaxing strict pull request checks.
 11. CodeQL uses the fully pinned v4 action line before the v3 retirement deadline.
 12. Release and attestation workflows are manual, SHA-pinned, least-privilege, protected-environment gated, and disabled by repository variables by default.
+13. Generated canary values are never copied from the host or stored in normalized profile metadata.
+14. The optional sinkhole has no routed network, retains only bounded request counts and matching canary identifiers, and discards request bytes.

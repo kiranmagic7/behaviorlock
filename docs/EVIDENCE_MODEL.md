@@ -38,7 +38,7 @@ Equivalent repeated observations are counted and deduplicated. The first eight u
 
 `validate` and `compare` load the profile and its companion evidence. They reject the pair unless:
 
-1. The profile is valid schema v2 with no unknown fields or trailing JSON values.
+1. The profile is valid schema v3 with no unknown fields or trailing JSON values.
 2. The companion byte size and complete digest match `evidenceArtifact`.
 3. Every behavior ID matches its normalized semantic key.
 4. Every referenced artifact digest matches the profile artifact.
@@ -50,8 +50,8 @@ Successful validation proves profile-to-artifact consistency. It does not authen
 
 The stable profile digest excludes duration, evidence artifact metadata, raw line references, repeat counts, and capture-local process, parent, descriptor, and attribution context. These fields can change between equivalent captures without changing the meaning of the normalized behavior set. Observation policy, acquisition policy, allowed authority, and immutable proxy image identity remain in the digest because changing an observation or egress boundary changes the meaning of a capture.
 
-Schema v1 remains published as a historical contract. The current CLI writes schema v2 and refuses cross-version comparison. Regenerate historical profiles with the current capture contract rather than silently discarding their missing evidence guarantees.
+Schemas v1 and v2 remain published as historical contracts. The current CLI writes schema v3 with phase-neutral kinds `npm.observation.profile` and `npm.observation.diff`, and refuses cross-version comparison. Schema v3 adds explicit lifecycle, import, and external phases; canary identifiers; observed-order sequences; and optional sinkhole metadata without weakening retained-evidence guarantees. Regenerate historical profiles with the current capture contract rather than silently filling fields that were never observed.
 
 ## Privacy
 
-Raw traces can contain paths, visible process arguments, package-controlled strings, and network destinations. Companion files are private evidence, not automatic publication artifacts. Review and redact deliberately before sharing; redaction creates a different artifact and requires a regenerated profile.
+Raw traces can contain paths, visible process arguments, package-controlled strings, generated nonsecret canary values, and network destinations. Companion files are private evidence, not automatic publication artifacts. The optional sinkhole retains counts and matching canary identifiers, not request bytes. Review and redact deliberately before sharing; redaction creates a different artifact and requires a regenerated profile.

@@ -16,6 +16,8 @@ The acquisition proxy work was also implemented after this reviewed base. Prepar
 
 The expanded observation work was implemented after this reviewed base. It adds bounded process and descriptor context, new syscall families, an explicit observation-policy version, and a versioned rule registry. Its regression and hosted checks do not inherit this audit decision; a new review remains required before the relevant release gates can close.
 
+The schema v3 phase, canary, sequence, import, and inert-sinkhole work was implemented after this reviewed base. Its generated values are nonsecret, its sinkhole has no routed network, and its local tests use inert fixtures. Those facts do not inherit this audit decision; hosted no-route and payload-discard evidence plus a new maintainer security review are required before any release gate can rely on the work.
+
 ## Method
 
 The review combined:
@@ -73,7 +75,7 @@ Preparation needs npm registry access. Lifecycle scripts are disabled, but packa
 
 ### Containers share the host kernel
 
-The package process has no host mounts, no Docker socket, no network during lifecycle execution, and zero effective capabilities. It still shares a kernel with the Docker host or Docker Desktop virtual machine. A kernel or container runtime exploit is outside the protection offered by this harness.
+The package process has no host mounts, no Docker socket, no routed network during selected-phase execution, and zero effective capabilities. The optional sinkhole exposes only unrouted loopback responders. Both containers still share a kernel with the Docker host or Docker Desktop virtual machine. A kernel or container runtime exploit is outside the protection offered by this harness.
 
 ### Ordinary profiles are unsigned
 
@@ -81,7 +83,7 @@ Anyone can edit JSON provenance fields. Structural validation cannot establish a
 
 ### Observation is incomplete
 
-The parser covers selected path and descriptor file calls, process activity, network operations, and timing calls across one install lifecycle path. It does not capture file contents, ordinary in-process environment reads, every syscall or protocol, all descriptor-sharing semantics, delayed behavior, or normal package runtime.
+The parser covers selected path and descriptor file calls, process activity, network operations, and timing calls across one selected lifecycle or import phase. It does not capture file contents, ordinary in-process environment reads, every syscall or protocol, all descriptor-sharing semantics, delayed behavior, or normal package runtime. Generated canary and observed-sequence context narrow some questions but do not close these coverage limits.
 
 ## Tool results
 

@@ -2,13 +2,13 @@
 
 ## Scope
 
-BehaviorLock `0.1.0-dev` compares selected Linux system calls observed while npm install lifecycle scripts execute for two exact versions of the same public registry package.
+BehaviorLock `0.1.0-dev` compares selected Linux system calls observed during the same bounded phase for two exact versions of one public registry package. Offline install lifecycle execution is the default. Import and sinkhole observation are explicit experiments.
 
 The system has four main boundaries:
 
 1. Package specification validation
 2. Acquisition and preparation
-3. Offline execution and tracing
+3. Selected-phase execution and tracing
 4. Normalization, validation, and comparison
 
 ## Components
@@ -17,7 +17,7 @@ The system has four main boundaries:
 | --- | --- |
 | `internal/npm` | Parse exact npm package specifications and generate package URLs |
 | `internal/capture` | Construct bounded Docker argument arrays and orchestrate capture |
-| `runner` | Prepare package filesystems and run lifecycle scripts under `strace` |
+| `runner` | Prepare package filesystems and run lifecycle or resolved import phases under `strace` |
 | `internal/trace` | Parse bounded trace input into normalized behaviors |
 | `internal/model` | Validate profiles, normalize behavior, and compute stable digests |
 | `internal/compare` | Check profile compatibility, calculate changes, and assign review rules |
@@ -57,6 +57,7 @@ Preparation records:
 3. Runner image content ID and architecture
 4. Node, npm, and `strace` versions
 5. Acquisition network mode, policy version, allowed authority, and immutable proxy image ID
+6. A bounded CommonJS, ESM, or unsupported import-entry-point plan
 
 The stopped preparation container is committed to a random temporary tag. Docker returns the committed content ID, and execution uses that immutable ID.
 
@@ -64,7 +65,7 @@ The stopped preparation container is committed to a random temporary tag. Docker
 
 Execution uses:
 
-1. Docker network mode `none`
+1. Docker network mode `none` by default, or an opt-in shared namespace with an inert responder that itself has network mode `none`
 2. A read only root filesystem
 3. No host mounts or host namespaces
 4. Bounded tmpfs mounts for work, temporary data, home, and trace storage
@@ -75,6 +76,10 @@ Execution uses:
 The supervisor begins as root and retains only `SETUID`, `SETGID`, and `SYS_PTRACE` after all capabilities are dropped. Package code runs as uid `65532` with zero effective capabilities.
 
 The trace directory is owned by root with mode `0700`. Package code cannot read, erase, or replace trace files.
+
+Each capture generates distinct nonsecret decoy values for declared file and environment locations. Generated values are not stored in profile metadata. Exact matches are converted to stable canary identifiers only when visible in an already observed filesystem target, process argument, or bounded sinkhole request.
+
+Lifecycle execution invokes `npm rebuild` for `preinstall`, `install`, and `postinstall`. Import execution resolves and loads the package entry point as CommonJS or ESM. Import profiles use a different phase and coverage scope; unresolved and unsupported entry points produce an explicit `unsupported` result.
 
 ### Completion evidence
 
@@ -103,11 +108,14 @@ Each behavior contains:
 | `outcome` | `success`, `blocked`, `failed`, or `unknown` |
 | `errno` | Visible Linux error name when present |
 | `sensitive` | Whether the target matches a common credential path |
+| `canaryIds` | Stable identifiers for exact generated canaries visible on an approved surface |
 | `count` | Number of equivalent raw observations |
 | `id` | Content-derived semantic behavior identifier |
 | `evidence` | One to eight raw artifact, line number, and exact line digest references |
 | `sourceSyscall` | Original syscall family |
 | `runtime` | Up to eight bounded process, parent, descriptor, and attribution contexts |
+
+Profiles can also contain bounded observed-order sequences. Each sequence references two through 32 stable behavior IDs from one root process lineage. Runtime PIDs and descriptors are excluded from sequence identity. Sequences describe order only and do not classify intent.
 
 Disposable roots are normalized only at path boundaries:
 
@@ -122,24 +130,25 @@ Disposable roots are normalized only at path boundaries:
 
 `validate` checks:
 
-1. Schema and kind versions
+1. Schema and phase-neutral kind versions
 2. Exact package name, version, and package URL agreement
 3. Bounded UTF 8 text without control characters
 4. Valid SHA 256 content IDs and digests
 5. Valid SHA 512 npm integrity evidence
-6. Consistent capture mode, coverage, lifecycle, and result state
-7. Behavior type, argument, count, semantic ID, evidence reference, and outcome limits
-8. The complete companion evidence artifact digest and byte size
-9. Every referenced raw line digest and line boundary
-10. No trailing JSON values or unknown fields
+6. Consistent phase, capture mode, coverage, lifecycle, import, sinkhole, and result state
+7. Declared canary identifiers and references without generated values
+8. Behavior and sequence type, argument, count, semantic ID, evidence reference, and outcome limits
+9. The complete companion evidence artifact digest and byte size
+10. Every referenced raw line digest and line boundary
+11. No trailing JSON values or unknown fields
 
-Validation proves that the supplied schema v2 profile and companion raw artifact agree. Profiles have `attestation: none`, so successful validation does not establish who created either artifact or whether the capture provenance fields are true. Schema v1 files remain published for historical decoding, but the current CLI rejects cross-version comparison and asks the caller to regenerate old profiles.
+Validation proves that the supplied schema v3 profile and companion raw artifact agree. Profiles have `attestation: none`, so successful validation does not establish who created either artifact or whether the capture provenance fields are true. Schema v1 and v2 files remain published for historical decoding, but the current CLI rejects cross-version comparison and asks the caller to regenerate old profiles.
 
 ## Stable digest
 
-The stable profile digest includes subject identity, tool identity, capture environment, observation policy, result state, and the normalized behavior set.
+The stable profile digest includes subject identity, tool identity, phase, capture environment, observation policy, result state, normalized behaviors, observed sequences, sinkhole policy, and visible canary movement.
 
-It excludes duration, evidence artifact metadata, evidence references, repeated event counts, runtime process/parent/descriptor context, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
+It excludes duration, evidence artifact metadata, evidence references, repeated event counts, sinkhole request counts, runtime process/parent/descriptor context, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
 
 ## Comparison contract
 
@@ -150,20 +159,21 @@ Profiles must:
 3. Use the same trace integrity mode
 4. Use the same runner image reference, resolved image ID, and architecture
 5. Use the same Node, npm, and `strace` versions
-6. Use the same network mode, sandbox profile, coverage scope, and observation policy
+6. Use the same lifecycle, import, or external phase
+7. Use the same network mode, sandbox profile, coverage scope, and observation policy
 
-External traces require explicit `--allow-external` acknowledgement.
+Lifecycle and import profiles are never compared or merged silently. External traces require explicit `--allow-external` acknowledgement.
 
-The comparator calculates added and removed behavior keys. Added behavior is classified by deterministic rules in `internal/compare`.
+The comparator calculates added and removed behavior keys and sequence identities. Added behavior is classified by deterministic rules in `internal/compare`; removed behavior and all sequence changes remain uninterpreted evidence context. An added sequence makes `reviewRequired` true, but a sequence-only change leaves `highestReviewLevel` at `none` because BehaviorLock does not assign an invented level to ordering.
 
 ### Review rules
 
 | Rule | Level | Observation |
 | --- | --- | --- |
 | `BL100` | Critical | New access to a common credential or secret path |
-| `BL200` | High | New network connection attempt during offline execution |
-| `BL201` | High | New network send attempt during offline execution |
-| `BL202` | High | New network send to port 53 during offline execution; payload not decoded |
+| `BL200` | High | New network connection attempt during the selected phase |
+| `BL201` | High | New network send attempt during the selected phase |
+| `BL202` | High | New network send to port 53 during the selected phase; payload not decoded |
 | `BL203` | High | New bind or listener setup |
 | `BL204` | Medium | New inbound acceptance attempt |
 | `BL205` | Low | New socket creation |
@@ -183,7 +193,7 @@ The comparator calculates added and removed behavior keys. Added behavior is cla
 
 `BL600` matches `/.dockerenv`, `/run/.containerenv`, normalized `/proc/$PID/cgroup`, `/proc/self/status`, `/proc/self/mountinfo`, `/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`, and `/sys/class/dmi` or a descendant. Exact or path-boundary matching prevents similarly named files from receiving the rule. Sensitive-path classification takes precedence as `BL100`. A match is an observation for review: diagnostic and platform-detection code can legitimately read these paths, so it does not prove sandbox evasion or malicious intent. Ptrace and timing observations use `BL304` and `BL601`, preserving the established meaning of both `BL500` and `BL600`.
 
-The complete versioned registry, precedence rules, and attribution notes are in [review rules](RULES.md).
+The complete versioned registry, precedence rules, optional `consistent with` ATT&CK context, and attribution notes are in [review rules](RULES.md).
 
 ### Descriptor and process context
 

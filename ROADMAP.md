@@ -26,13 +26,15 @@ Every item below must pass on a GitHub hosted Linux runner:
 13. Every added report item points to retained raw trace evidence.
 14. Trusted CI profiles carry verifiable provenance or an artifact attestation before they are used as cross-workflow policy inputs.
 
-Gate 13 has a schema v2 implementation and local regression coverage. It remains a release gate until the hosted integration verifies companion creation, permissions, tamper rejection, and report references on the reviewed commit. No gate is considered closed solely because code exists on a feature branch.
+Gate 13 has a schema v3 implementation and local regression coverage. It remains a release gate until the hosted integration verifies companion creation, permissions, tamper rejection, and report references on the reviewed commit. No gate is considered closed solely because code exists on a feature branch.
 
 Gate 6 has a network-none preparation and exact-registry Unix-socket proxy implementation. It remains open until hosted integration proves direct public, private, metadata, and gateway denial; exact registry success; nonregistry rejection; unprivileged proxy runtime; and complete resource cleanup.
 
 Gate 14 has a protected trusted-profile workflow, deterministic bundle, strict verifier, and GitHub artifact attestation implementation. It remains open until the workflow runs successfully from protected `main` for the reviewed fixture and the resulting bundle is independently verified. Pull request artifacts never satisfy this gate.
 
 Gates 8, 10, and 12 have a feature-branch implementation for real tracer death, distinct resource outcomes, bounded cleanup, and ten repeated semantic captures. They remain open until every hosted fixture and the aggregate required job pass on the reviewed commit and the change reaches protected `main`.
+
+The phase, canary, sequence, and inert-sinkhole work has a feature-branch implementation under schema v3. It remains experimental until its hosted no-route, inert-stage, payload-discard, canary-redaction, import-resolution, and cleanup checks pass on the reviewed commit. These features do not close any release gate by their existence.
 
 The release workflow remains disabled by default. It queries fresh GitHub check evidence for the exact protected commit and rejects missing, skipped, stale, duplicated, or failed gate proofs. No release tag, draft, container image, or public artifact is created merely because the workflow files exist.
 

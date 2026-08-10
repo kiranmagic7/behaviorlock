@@ -35,3 +35,5 @@ DNS is identified from an observed network send whose endpoint uses port 53. Beh
 Descriptor attribution is explicit. If the parser can follow an open, socket, duplicate, fork, close, or descriptor reuse, it reports the known normalized path or endpoint. Otherwise it reports `fd:unknown`. It never guesses a filename from unrelated trace text.
 
 Process IDs, parent IDs, and descriptor numbers can appear in bounded `runtime` attribution objects. They are evidence coordinates, not semantic keys. Stable behavior IDs and profile digests exclude them.
+
+Some rules include optional MITRE ATT&CK references. Every reference uses the literal relationship `consistent with`. This metadata is review navigation only: it does not assert that a technique occurred, change a rule's review level, affect thresholds, or classify a package.
