@@ -96,7 +96,9 @@ run_resource_trace_container() {
     process) pids_limit=128; nproc_limit=128; memory_limit=512m ;;
     descriptor) nofile_limit=64 ;;
     tmpfs) work_size=4m ;;
-    file) file_limit=1048576 ;;
+    # The fixture applies its smaller RLIMIT_FSIZE after uid transition so the
+    # trusted tracer can retain the evidence needed to prove the boundary.
+    file) ;;
     output) temporary_size=4m ;;
     syscall) trace_size=8m ;;
     timeout) ;;
