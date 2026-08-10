@@ -23,12 +23,17 @@ All notable changes will be documented here. The project follows Keep a Changelo
 15. Explicit runner selection with immutable image resolution and runner-reference comparability
 16. No-publish release dry run with archive and runner SBOMs
 17. Fail-closed 14-gate release proof validator and protected trusted-profile attestation workflow
+18. Versioned review-rule registry with stable identifiers for expanded observations
+19. UDP/DNS, listener, descriptor mutation, directory enumeration, process lineage, anonymous-memory execution, ptrace, and timing observation
+20. Bounded per-process descriptor and lineage context with explicit unknown attribution
 
 ### Changed
 
 1. New reads of exact container, tracing, and environment fingerprint paths now receive medium review rule `BL600`.
 2. General file reads and metadata inspections keep low review rule `BL500`; sensitive-path rule `BL100` retains precedence.
 3. Numeric `/proc/<pid>` paths now normalize to the literal `/proc/$PID` token instead of collapsing the pid segment.
+4. Profile compatibility now requires the same explicit observation-policy version.
+5. Capture retains per-process trace identity for review without making runtime identifiers part of semantic behavior identity or the stable digest.
 
 ### Security
 

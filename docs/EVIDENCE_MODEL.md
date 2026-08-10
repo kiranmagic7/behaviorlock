@@ -44,11 +44,11 @@ Equivalent repeated observations are counted and deduplicated. The first eight u
 4. Every referenced artifact digest matches the profile artifact.
 5. Every referenced line exists and its exact digest matches.
 
-Successful validation proves profile-to-artifact consistency. It does not authenticate the producer, prove that the trace was complete, or establish that the package is safe. Profiles continue to declare `attestation: none` until the provenance release gate is complete.
+Successful validation proves profile-to-artifact consistency. It does not authenticate the producer, prove that the trace was complete, or establish that the package is safe. Ordinary profiles continue to declare `attestation: none`. The protected trusted-profile workflow can place a specifically reviewed pair into a separate GitHub-attested bundle; verification of that bundle does not authenticate any other profile.
 
 ## Stable digest and compatibility
 
-The stable profile digest excludes duration, evidence artifact metadata, raw line references, and repeat counts. These fields can change between equivalent captures without changing the meaning of the normalized behavior set. Acquisition policy, allowed authority, and immutable proxy image identity remain in the digest because a changed egress boundary changes the meaning of a capture.
+The stable profile digest excludes duration, evidence artifact metadata, raw line references, repeat counts, and capture-local process, parent, descriptor, and attribution context. These fields can change between equivalent captures without changing the meaning of the normalized behavior set. Observation policy, acquisition policy, allowed authority, and immutable proxy image identity remain in the digest because changing an observation or egress boundary changes the meaning of a capture.
 
 Schema v1 remains published as a historical contract. The current CLI writes schema v2 and refuses cross-version comparison. Regenerate historical profiles with the current capture contract rather than silently discarding their missing evidence guarantees.
 

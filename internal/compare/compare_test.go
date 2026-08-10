@@ -58,17 +58,17 @@ func TestProfilesFlagsNewEnvironmentFingerprintRead(t *testing.T) {
 	baseline := completeProfile("1.0.0")
 	candidate := completeProfile("1.1.0", model.Behavior{
 		Type: "filesystem.read", Operation: "inspect", Target: "/proc/self/status",
-		Outcome: "success", Count: 1, Evidence: "trace:L1", SourceCall: "openat",
+		Outcome: "success", Count: 1, SourceCall: "openat",
 	})
 	diff, err := Profiles(baseline, candidate, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff.Summary.Verdict != "review" || diff.Summary.HighestRisk != "medium" || len(diff.Added) != 1 {
+	if !diff.Summary.ReviewRequired || diff.Summary.HighestReviewLevel != "medium" || len(diff.Added) != 1 {
 		t.Fatalf("unexpected diff summary: %#v", diff.Summary)
 	}
 	change := diff.Added[0]
-	if change.RuleID != "BL600" || change.Risk != "medium" {
+	if change.RuleID != "BL600" || change.ReviewLevel != "medium" {
 		t.Fatalf("unexpected environment fingerprint classification: %#v", change)
 	}
 }
@@ -158,6 +158,35 @@ func TestClassifyOrdinaryReadUsesBL500(t *testing.T) {
 	}
 }
 
+func TestClassifyExpandedObservationRules(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		behavior model.Behavior
+		level    string
+		ruleID   string
+	}{
+		{behavior: model.Behavior{Type: "network.send"}, level: "high", ruleID: "BL201"},
+		{behavior: model.Behavior{Type: "network.dns"}, level: "high", ruleID: "BL202"},
+		{behavior: model.Behavior{Type: "network.listen"}, level: "high", ruleID: "BL203"},
+		{behavior: model.Behavior{Type: "network.accept"}, level: "medium", ruleID: "BL204"},
+		{behavior: model.Behavior{Type: "network.socket"}, level: "low", ruleID: "BL205"},
+		{behavior: model.Behavior{Type: "process.create"}, level: "medium", ruleID: "BL302"},
+		{behavior: model.Behavior{Type: "process.memfd"}, level: "high", ruleID: "BL303"},
+		{behavior: model.Behavior{Type: "process.fileless_exec"}, level: "high", ruleID: "BL303"},
+		{behavior: model.Behavior{Type: "process.ptrace"}, level: "medium", ruleID: "BL304"},
+		{behavior: model.Behavior{Type: "filesystem.truncate"}, level: "high", ruleID: "BL403"},
+		{behavior: model.Behavior{Type: "filesystem.descriptor_write"}, level: "high", ruleID: "BL403"},
+		{behavior: model.Behavior{Type: "filesystem.enumerate"}, level: "low", ruleID: "BL501"},
+		{behavior: model.Behavior{Type: "environment.timing"}, level: "low", ruleID: "BL601"},
+	}
+	for _, test := range tests {
+		level, ruleID, _ := classify(test.behavior)
+		if level != test.level || ruleID != test.ruleID {
+			t.Errorf("%s classified as %s %s, want %s %s", test.behavior.Type, level, ruleID, test.level, test.ruleID)
+		}
+	}
+}
+
 func TestProfilesRejectsIncompleteTrace(t *testing.T) {
 	t.Parallel()
 	baseline := completeProfile("1.0.0")
@@ -217,5 +246,15 @@ func TestProfilesRejectDifferentRunnerReferencesForSameContentID(t *testing.T) {
 	candidate.Capture.RunnerImage = "ghcr.io/kiranmagic7/behaviorlock-runner:v0.1.0"
 	if _, err := Profiles(baseline, candidate, "test"); err == nil || !strings.Contains(err.Error(), "runner image reference") {
 		t.Fatalf("different runner references were not rejected: %v", err)
+	}
+}
+
+func TestProfilesRejectDifferentObservationPolicies(t *testing.T) {
+	t.Parallel()
+	baseline := completeProfile("1.0.0")
+	candidate := completeProfile("1.1.0")
+	candidate.Capture.ObservationPolicy = "strace-observation-v3"
+	if _, err := Profiles(baseline, candidate, "test"); err == nil || !strings.Contains(err.Error(), "observation policy") {
+		t.Fatalf("different observation policies were not rejected: %v", err)
 	}
 }

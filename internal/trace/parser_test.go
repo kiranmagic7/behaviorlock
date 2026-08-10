@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,272 @@ func TestParseRejectsUnfinishedTrace(t *testing.T) {
 	_, err := Parse(strings.NewReader(`openat(AT_FDCWD, "/tmp/x", O_RDONLY <unfinished ...>`))
 	if err == nil {
 		t.Fatal("expected unfinished trace to fail")
+	}
+}
+
+func TestParseReassemblesMatchingResumedSyscall(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`[pid 123] connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("203.0.113.10")}, 16 <unfinished ...>`,
+		`[pid 123] <... connect resumed>) = -1 ENETUNREACH (Network is unreachable)`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Behaviors) != 1 || result.Behaviors[0].Type != "network.connect" || len(result.Behaviors[0].Evidence) != 2 {
+		t.Fatalf("unexpected resumed behavior: %#v", result.Behaviors)
+	}
+}
+
+func TestParseRejectsMismatchedResumedSyscall(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`[pid 123] connect(3, {sa_family=AF_INET}, 16 <unfinished ...>`,
+		`[pid 123] <... read resumed>"x", 1) = 1`,
+	}, "\n")
+	if _, err := Parse(strings.NewReader(input)); err == nil {
+		t.Fatal("mismatched resumed syscall unexpectedly succeeded")
+	}
+}
+
+func TestParseObservesUDPAndListenerOperations(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`100 socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3<socket:[1]>`,
+		`100 sendto(3<socket:[1]>, "query", 5, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("8.8.8.8")}, 16) = -1 ENETUNREACH (Network is unreachable)`,
+		`100 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4<socket:[2]>`,
+		`100 bind(4<socket:[2]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("0.0.0.0")}, 16) = 0`,
+		`100 listen(4<socket:[2]>, 128) = 0`,
+		`100 accept4(4<socket:[2]>, {sa_family=AF_INET, sin_port=htons(50000), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 5<socket:[3]>`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := []string{"network.socket", "network.dns", "network.socket", "network.bind", "network.listen", "network.accept"}
+	if len(result.Behaviors) != len(wantTypes) {
+		t.Fatalf("got %d behaviors, want %d: %#v", len(result.Behaviors), len(wantTypes), result.Behaviors)
+	}
+	for index, want := range wantTypes {
+		if result.Behaviors[index].Type != want {
+			t.Fatalf("behavior %d type = %q, want %q", index, result.Behaviors[index].Type, want)
+		}
+	}
+	if result.Behaviors[1].Target != "AF_INET:8.8.8.8:53" || result.Behaviors[4].Target != "AF_INET:0.0.0.0:8080" {
+		t.Fatalf("network attribution failed: %#v", result.Behaviors)
+	}
+}
+
+func TestParseDoesNotAttributeMalformedNetworkDescriptorsToZero(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`500 connect(not_a_descriptor, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("203.0.113.10")}, 16) = 0`,
+		`500 bind(not_a_descriptor, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0`,
+		`500 listen(0, 8) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Behaviors) != 1 {
+		t.Fatalf("behaviors = %#v", result.Behaviors)
+	}
+	behavior := result.Behaviors[0]
+	if behavior.Type != "network.listen" || behavior.Target != "fd:unknown" ||
+		len(behavior.Runtime) != 1 || behavior.Runtime[0].Descriptor != "0" || behavior.Runtime[0].Attribution != "unknown" {
+		t.Fatalf("malformed network descriptor polluted descriptor zero: %#v", behavior)
+	}
+}
+
+func TestParseAttributesDescriptorMutationAndEnumeration(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`200 openat(AT_FDCWD, "/work/data.bin", O_RDWR|O_CREAT, 0600) = 3</work/data.bin>`,
+		`200 dup(3</work/data.bin>) = 8</work/data.bin>`,
+		`200 ftruncate(8</work/data.bin>, 0) = 0`,
+		`200 mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_SHARED, 3</work/data.bin>, 0) = 0x7f00`,
+		`200 close(8</work/data.bin>) = 0`,
+		`200 openat(AT_FDCWD, "/work/list", O_RDONLY|O_DIRECTORY) = 8</work/list>`,
+		`200 getdents64(8</work/list>, 0x7f00, 32768) = 48`,
+		`200 truncate("/work/direct.bin", 10) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ftruncate":  "$WORK/data.bin",
+		"mmap":       "$WORK/data.bin",
+		"getdents64": "$WORK/list",
+		"truncate":   "$WORK/direct.bin",
+	}
+	for _, behavior := range result.Behaviors {
+		if target, exists := want[behavior.SourceCall]; exists {
+			if behavior.Target != target {
+				t.Fatalf("%s target = %q, want %q", behavior.SourceCall, behavior.Target, target)
+			}
+			delete(want, behavior.SourceCall)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing descriptor observations: %#v", want)
+	}
+}
+
+func TestParseKeepsDescriptorTablesSeparateAndClearsClosedDescriptors(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`[pid 300] openat(AT_FDCWD, "/work/a", O_RDWR) = 3</work/a>`,
+		`[pid 301] openat(AT_FDCWD, "/work/b", O_RDWR) = 3</work/b>`,
+		`[pid 300] ftruncate(3</work/a>, 0) = 0`,
+		`[pid 301] ftruncate(3</work/b>, 0) = 0`,
+		`[pid 300] close(3</work/a>) = 0`,
+		`[pid 300] ftruncate(3, 0) = -1 EBADF (Bad file descriptor)`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []string{}
+	for _, behavior := range result.Behaviors {
+		if behavior.SourceCall == "ftruncate" {
+			targets = append(targets, behavior.Target)
+		}
+	}
+	want := []string{"$WORK/a", "$WORK/b", "fd:unknown"}
+	if len(targets) != len(want) {
+		t.Fatalf("targets = %#v", targets)
+	}
+	for index := range want {
+		if targets[index] != want[index] {
+			t.Fatalf("target %d = %q, want %q", index, targets[index], want[index])
+		}
+	}
+}
+
+func TestParseCopiesDescriptorAttributionIntoChildProcess(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`500 openat(AT_FDCWD, "/work/inherited", O_RDWR) = 3</work/inherited>`,
+		`500 clone(child_stack=NULL, flags=SIGCHLD) = 501`,
+		`[pid 501] ftruncate(3</work/inherited>, 0) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	behavior := result.Behaviors[len(result.Behaviors)-1]
+	if behavior.Type != "filesystem.descriptor_write" || behavior.Target != "$WORK/inherited" ||
+		len(behavior.Runtime) != 1 || behavior.Runtime[0].Parent != "500" {
+		t.Fatalf("child descriptor attribution was not inherited: %#v", behavior)
+	}
+}
+
+func TestParseClearsCloseOnExecDescriptorsAfterSuccessfulExec(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`700 openat(AT_FDCWD, "/work/closed-on-exec", O_RDWR|O_CLOEXEC) = 3</work/closed-on-exec>`,
+		`700 openat(AT_FDCWD, "/work/retained", O_RDWR) = 4</work/retained>`,
+		`700 execve("/usr/bin/node", ["node"], 0x0) = 0`,
+		`700 ftruncate(3, 0) = -1 EBADF (Bad file descriptor)`,
+		`700 ftruncate(4</work/retained>, 0) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []string{}
+	for _, behavior := range result.Behaviors {
+		if behavior.SourceCall == "ftruncate" {
+			targets = append(targets, behavior.Target)
+		}
+	}
+	want := []string{"fd:unknown", "$WORK/retained"}
+	if len(targets) != len(want) || targets[0] != want[0] || targets[1] != want[1] {
+		t.Fatalf("close-on-exec attribution = %#v, want %#v", targets, want)
+	}
+}
+
+func TestParseClearsDescriptorsWhenAnObservedProcessExits(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`800 openat(AT_FDCWD, "/work/old-process", O_RDWR) = 3</work/old-process>`,
+		`800 +++ exited with 0 +++`,
+		`800 ftruncate(3, 0) = -1 EBADF (Bad file descriptor)`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	behavior := result.Behaviors[len(result.Behaviors)-1]
+	if behavior.Type != "filesystem.descriptor_write" || behavior.Target != "fd:unknown" {
+		t.Fatalf("exited process descriptor state leaked into a reused pid: %#v", behavior)
+	}
+}
+
+func TestParseRecordsProcessLineageFilelessExecutionPtraceAndTiming(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`400 clone(child_stack=NULL, flags=SIGCHLD) = 401`,
+		`[pid 401] memfd_create("stage", MFD_CLOEXEC) = 4</memfd:stage>`,
+		`[pid 401] execveat(4</memfd:stage>, "", ["stage"], 0x0, AT_EMPTY_PATH) = 0`,
+		`[pid 401] ptrace(PTRACE_TRACEME, 0, NULL, NULL) = -1 EPERM (Operation not permitted)`,
+		`[pid 401] clock_gettime(CLOCK_MONOTONIC, {tv_sec=1, tv_nsec=2}) = 0`,
+	}, "\n")
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := []string{"process.create", "process.memfd", "process.fileless_exec", "process.ptrace", "environment.timing"}
+	if len(result.Behaviors) != len(wantTypes) {
+		t.Fatalf("behaviors = %#v", result.Behaviors)
+	}
+	for index, want := range wantTypes {
+		behavior := result.Behaviors[index]
+		if behavior.Type != want {
+			t.Fatalf("behavior %d type = %q, want %q", index, behavior.Type, want)
+		}
+		if index > 0 && (len(behavior.Runtime) != 1 || behavior.Runtime[0].Process != "401" || behavior.Runtime[0].Parent != "400") {
+			t.Fatalf("behavior %d lost process lineage: %#v", index, behavior.Runtime)
+		}
+	}
+	if result.Behaviors[2].Target != "memfd:stage" || result.Behaviors[2].Runtime[0].Attribution != "descriptor" {
+		t.Fatalf("fileless execution attribution failed: %#v", result.Behaviors[2])
+	}
+}
+
+func TestParseDoesNotTreatOrdinaryExecveatDotPathAsFileless(t *testing.T) {
+	t.Parallel()
+	result, err := Parse(strings.NewReader(`600 execveat(AT_FDCWD, ".", ["."], 0x0, 0) = -1 EACCES (Permission denied)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Behaviors) != 1 || result.Behaviors[0].Type != "process.exec" || result.Behaviors[0].Target != "." {
+		t.Fatalf("ordinary execveat dot path was misclassified: %#v", result.Behaviors)
+	}
+}
+
+func TestParserStateEnforcesProcessAndDescriptorBounds(t *testing.T) {
+	t.Parallel()
+	processState := newParserState()
+	for identifier := 1; identifier <= maxTrackedProcesses; identifier++ {
+		if err := processState.observeProcess(strconv.Itoa(identifier)); err != nil {
+			t.Fatalf("process %d was rejected before the bound: %v", identifier, err)
+		}
+	}
+	if err := processState.observeProcess(strconv.Itoa(maxTrackedProcesses + 1)); err == nil {
+		t.Fatal("process state exceeded its bound")
+	}
+
+	descriptorState := newParserState()
+	for descriptor := 0; descriptor < maxTrackedDescriptors; descriptor++ {
+		if err := descriptorState.setDescriptor("root", descriptor, descriptorInfo{target: "$WORK/bounded", kind: "file"}); err != nil {
+			t.Fatalf("descriptor %d was rejected before the bound: %v", descriptor, err)
+		}
+	}
+	if err := descriptorState.setDescriptor("root", maxTrackedDescriptors, descriptorInfo{target: "$WORK/overflow", kind: "file"}); err == nil {
+		t.Fatal("descriptor state exceeded its bound")
 	}
 }
 

@@ -61,8 +61,8 @@ case "$mode" in
     set +e
     # The traced child shell expands its positional argument.
     # shellcheck disable=SC2016
-    strace -u scanner -ff -qq -s 4096 -yy \
-      -e trace=%file,%process,%network \
+    strace -u scanner -ff -qq -ttt -s 4096 -yy \
+      -e trace=%file,%process,%network,ftruncate,mmap,getdents,getdents64,memfd_create,ptrace,clock_gettime,clock_getres,gettimeofday,time,nanosleep,clock_nanosleep,dup,dup2,dup3,fcntl,close \
       -o /trace/raw \
       -- /bin/sh -c 'exec /opt/behaviorlock/lifecycle.sh "$1" > /tmp/package-output.log 2>&1' \
       behaviorlock-lifecycle "$package_spec" \
@@ -87,10 +87,33 @@ case "$mode" in
       exit 72
     fi
     printf 'BEHAVIORLOCK_TRACE_V1\n'
-    for trace_file in /trace/raw*; do
-      [ -f "$trace_file" ] || continue
-      cat "$trace_file"
-    done
+    merge_fifo="/trace/merge.$$"
+    mkfifo "$merge_fifo"
+    (
+      for trace_file in /trace/raw*; do
+        [ -f "$trace_file" ] || continue
+        trace_pid="${trace_file##*.}"
+        case "$trace_pid" in
+          *[!0-9]*|'')
+            echo "strace output filename did not contain a numeric pid" >&2
+            exit 72
+            ;;
+        esac
+        awk -v trace_pid="$trace_pid" '{ print "[pid " trace_pid "] " $0 }' "$trace_file" || exit 72
+      done
+    ) > "$merge_fifo" &
+    merge_pid=$!
+    if ! LC_ALL=C sort -s -n -k3,3 "$merge_fifo"; then
+      kill "$merge_pid" 2>/dev/null || true
+      wait "$merge_pid" 2>/dev/null || true
+      echo "failed to merge per-process trace files" >&2
+      exit 72
+    fi
+    if ! wait "$merge_pid"; then
+      echo "failed to prefix per-process trace files" >&2
+      exit 72
+    fi
+    rm -f "$merge_fifo"
     printf '\nBEHAVIORLOCK_TRACE_END exit=%s\n' "$command_exit"
     ;;
   proxy)

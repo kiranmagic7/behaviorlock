@@ -87,6 +87,25 @@ func TestStableDigestIgnoresCaptureNoiseAndEvidenceCoordinates(t *testing.T) {
 	}
 }
 
+func TestStableDigestIgnoresRuntimeProcessAndDescriptorIdentifiers(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	left.Behaviors[0].Runtime = []RuntimeContext{{Process: "101", Parent: "100", Descriptor: "3", Attribution: "descriptor"}}
+	right.Behaviors[0].Runtime = []RuntimeContext{{Process: "901", Parent: "900", Descriptor: "17", Attribution: "descriptor"}}
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest != rightDigest {
+		t.Fatalf("runtime attribution changed semantic digest: %s != %s", leftDigest, rightDigest)
+	}
+}
+
 func TestStableDigestIncludesAcquisitionPolicyFingerprint(t *testing.T) {
 	t.Parallel()
 	left := testProfile()

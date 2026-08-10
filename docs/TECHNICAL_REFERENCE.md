@@ -107,6 +107,7 @@ Each behavior contains:
 | `id` | Content-derived semantic behavior identifier |
 | `evidence` | One to eight raw artifact, line number, and exact line digest references |
 | `sourceSyscall` | Original syscall family |
+| `runtime` | Up to eight bounded process, parent, descriptor, and attribution contexts |
 
 Disposable roots are normalized only at path boundaries:
 
@@ -136,9 +137,9 @@ Validation proves that the supplied schema v2 profile and companion raw artifact
 
 ## Stable digest
 
-The stable profile digest includes subject identity, tool identity, capture environment, result state, and the normalized behavior set.
+The stable profile digest includes subject identity, tool identity, capture environment, observation policy, result state, and the normalized behavior set.
 
-It excludes duration, evidence artifact metadata, evidence references, repeated event counts, process IDs, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
+It excludes duration, evidence artifact metadata, evidence references, repeated event counts, runtime process/parent/descriptor context, unstable temporary paths, and raw trace line numbers. This makes repeated captures comparable while preserving fields that can change the meaning of a result.
 
 ## Comparison contract
 
@@ -149,7 +150,7 @@ Profiles must:
 3. Use the same trace integrity mode
 4. Use the same runner image reference, resolved image ID, and architecture
 5. Use the same Node, npm, and `strace` versions
-6. Use the same network mode, sandbox profile, and coverage scope
+6. Use the same network mode, sandbox profile, coverage scope, and observation policy
 
 External traces require explicit `--allow-external` acknowledgement.
 
@@ -161,15 +162,34 @@ The comparator calculates added and removed behavior keys. Added behavior is cla
 | --- | --- | --- |
 | `BL100` | Critical | New access to a common credential or secret path |
 | `BL200` | High | New network connection attempt during offline execution |
+| `BL201` | High | New network send attempt during offline execution |
+| `BL202` | High | New network send to port 53 during offline execution; payload not decoded |
+| `BL203` | High | New bind or listener setup |
+| `BL204` | Medium | New inbound acceptance attempt |
+| `BL205` | Low | New socket creation |
 | `BL300` | High | New shell, downloader, or remote access process |
 | `BL301` | Medium | New executable process |
+| `BL302` | Medium | New child process creation |
+| `BL303` | High | New anonymous memory file or descriptor-backed execution |
+| `BL304` | Medium | New process tracing or inspection attempt |
 | `BL400` | High | New mutation outside disposable work and temporary roots |
 | `BL401` | Medium | New mutation inside a disposable writable root |
 | `BL402` | Medium | New deletion or permission change |
+| `BL403` | High | New truncation or descriptor-backed mutation |
 | `BL500` | Low | New file read or metadata inspection |
+| `BL501` | Low | New directory enumeration |
 | `BL600` | Medium | New access to a path commonly used to detect containers or tracing |
+| `BL601` | Low | New clock inspection or requested delay |
 
-`BL600` matches `/.dockerenv`, `/run/.containerenv`, normalized `/proc/$PID/cgroup`, `/proc/self/status`, `/proc/self/mountinfo`, `/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`, and `/sys/class/dmi` or a descendant. Exact or path-boundary matching prevents similarly named files from receiving the rule. Sensitive-path classification takes precedence as `BL100`. A match is an observation for review: diagnostic and platform-detection code can legitimately read these paths, so it does not prove sandbox evasion or malicious intent. This rule currently covers path-based observations only; `ptrace` and timing syscalls remain outside the parser's selected coverage.
+`BL600` matches `/.dockerenv`, `/run/.containerenv`, normalized `/proc/$PID/cgroup`, `/proc/self/status`, `/proc/self/mountinfo`, `/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`, and `/sys/class/dmi` or a descendant. Exact or path-boundary matching prevents similarly named files from receiving the rule. Sensitive-path classification takes precedence as `BL100`. A match is an observation for review: diagnostic and platform-detection code can legitimately read these paths, so it does not prove sandbox evasion or malicious intent. Ptrace and timing observations use `BL304` and `BL601`, preserving the established meaning of both `BL500` and `BL600`.
+
+The complete versioned registry, precedence rules, and attribution notes are in [review rules](RULES.md).
+
+### Descriptor and process context
+
+The parser keeps bounded descriptor tables separately for each observed process. Successful open, socket, duplicate, close, close-on-exec, process-exit, and child-creation calls update those tables. Descriptor-backed mutation, enumeration, listening, and fileless execution can therefore point to a normalized path or endpoint. If attribution is unavailable, the target is the explicit value `fd:unknown`; the parser never invents a path. This is bounded review context, not a complete model of every kernel descriptor-sharing edge case.
+
+Each behavior can retain bounded runtime context for review, including the observed process, its known parent, the descriptor number, and whether attribution was direct, descriptor-derived, or unknown. These capture-local identifiers do not alter behavior identity or the stable digest. Process lineage, descriptor context, event counts, and evidence coordinates may differ between semantically equivalent runs.
 
 Numeric process paths normalize at a path boundary, so `/proc/123/status` becomes `/proc/$PID/status` while a lookalike such as `/proc/123-backup/status` stays unchanged. Earlier development profiles affected by the old replacement bug can contain a different target and stable digest. Recapture both versions with the same BehaviorLock commit before using such profiles in a comparison.
 

@@ -20,20 +20,22 @@ An unprivileged proxy sidecar owns that socket and joins a separate egress netwo
 
 The execution phase starts from the prepared filesystem. Networking is disabled. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` so the supervisor can perform the identity transition and trace inside the container PID namespace. The package process has zero effective capabilities. Docker's default seccomp policy remains intact.
 
-`strace` writes into a root owned mode `0700` temporary filesystem that package code cannot access. It follows a selected set of file, process, and network syscalls. Package output is separated from the trace envelope. Root owned start and end sentinel reads, an empty tracer diagnostic channel, and a completion footer establish basic channel integrity. Missing evidence, tracer diagnostics, timeout, truncation, or malformed completion evidence makes the profile incomplete.
+`strace` writes timestamped per-process files into a root owned mode `0700` temporary filesystem that package code cannot access. The trusted runner prefixes each retained line with the numeric trace-file process identifier and merges the files by the tracer timestamp before assembling the envelope. The selected calls cover path and descriptor file activity, process creation and execution, anonymous memory files, process inspection, socket and endpoint activity, and timing probes. Package output is separated from the trace envelope. Root owned start and end sentinel reads, an empty tracer diagnostic channel, and a completion footer establish basic channel integrity. Missing evidence, tracer diagnostics, timeout, truncation, or malformed completion evidence makes the profile incomplete.
 
 ## Normalization
 
-The parser has byte, line, and behavior limits. It rejects invalid UTF 8 and unfinished syscalls. It normalizes only known disposable roots at exact path boundaries and selected process identifiers:
+The parser has byte, line, behavior, process, descriptor, and pending-syscall limits. It rejects invalid UTF 8, reassembles matching unfinished/resumed calls, and rejects inconsistent or incomplete continuation state. It normalizes only known disposable roots at exact path boundaries and selected process identifiers:
 
 1. `/work` becomes `$WORK`
 2. `/home/scanner` becomes `$HOME`
 3. selected npm temporary roots become `$TMP`
 4. numeric `/proc` identifiers become `$PID`
 
-Behavior records are deduplicated, counted, sorted, and assigned content-derived semantic identifiers. A separate mode `0600` raw evidence artifact is retained. Each normalized behavior carries up to eight references containing the artifact SHA 256, raw line number, and exact raw line SHA 256. Validation checks both the complete artifact and every reference before a profile can be compared.
+Successful open, socket, duplicate, close, and child-creation calls update bounded descriptor and lineage state separately for each process. This allows descriptor-only activity to receive a normalized path or endpoint when evidence supports the attribution. Missing attribution remains explicit as `fd:unknown`; it is never guessed.
 
-The semantic digest excludes duration, evidence artifact metadata, line references, and observation counts, but retains runner identity, subject, coverage, result, and normalized behavior meaning. Repeated captures can therefore have different evidence coordinates without changing the meaning digest.
+Behavior records are deduplicated, counted, sorted, and assigned content-derived semantic identifiers. They may retain up to eight capture-local runtime contexts containing process, parent, descriptor, and attribution data. A separate mode `0600` raw evidence artifact is retained. Each normalized behavior carries up to eight references containing the artifact SHA 256, raw line number, and exact raw line SHA 256. Validation checks both the complete artifact and every reference before a profile can be compared.
+
+The semantic digest excludes duration, evidence artifact metadata, line references, observation counts, and runtime process/parent/descriptor context, but retains runner identity, subject, observation policy, coverage, result, and normalized behavior meaning. Repeated captures can therefore have different evidence coordinates or runtime identifiers without changing the meaning digest.
 
 ## Comparison
 

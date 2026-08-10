@@ -12,7 +12,9 @@
 
 The schema v2 retained-evidence work was implemented after this reviewed base. Its local regression suite checks whole-artifact and exact-line tamper rejection, but it does not inherit this audit decision. A new review and hosted evidence are required before release gate 13 can be closed.
 
-The acquisition proxy work was also implemented after this reviewed base. Preparation now uses network mode `none` and reaches an exact-registry proxy through a private Unix socket. This design and its tests do not inherit the audit decision above; gate 6 still requires a new review and hosted proof.
+The acquisition proxy work was also implemented after this reviewed base. Preparation now uses network mode `none` and reaches an exact-registry proxy through a private Unix socket. Its post-review draft branch passed hosted direct-egress denial, exact-registry allowance, off-registry rejection, unprivileged-runtime, cleanup, and hardened integration checks. Those results do not inherit or replace the audit decision above; gate 6 still requires maintainer review and merge to the protected branch.
+
+The expanded observation work was implemented after this reviewed base. It adds bounded process and descriptor context, new syscall families, an explicit observation-policy version, and a versioned rule registry. Its regression and hosted checks do not inherit this audit decision; a new review remains required before the relevant release gates can close.
 
 ## Method
 
@@ -65,23 +67,21 @@ The fix validates the decoded SHA 512 length, runner image content ID, lifecycle
 
 ## Open design risks
 
-### Acquisition has broad outbound network access
+### Acquisition proxy remains a trusted boundary
 
-Preparation needs npm registry access. Lifecycle scripts are disabled, but package and transitive dependency metadata can still influence what npm fetches. The preparation container can potentially reach destinations beyond the public npm registry, including addresses reachable from the Docker bridge.
-
-The post-review feature branch adds an allowlisted proxy with network-none preparation. The risk remains open in this audit record until that implementation passes hosted adversarial tests and a new review. Capture must still run on a disposable host with no trusted workloads or credentials.
+Preparation needs npm registry access. Lifecycle scripts are disabled, but package and transitive dependency metadata still influence what npm requests. The post-review branch removes a direct route from npm and allows the sidecar proxy to connect only to validated public addresses for the exact npm registry authority. Registry content, proxy correctness, DNS at the proxy boundary, and the shared Docker host kernel remain trusted. Hosted adversarial checks passed on the draft branch, but this audit record remains open pending maintainer review and merge. Capture must still run on a disposable host with no trusted workloads or credentials.
 
 ### Containers share the host kernel
 
 The package process has no host mounts, no Docker socket, no network during lifecycle execution, and zero effective capabilities. It still shares a kernel with the Docker host or Docker Desktop virtual machine. A kernel or container runtime exploit is outside the protection offered by this harness.
 
-### Profiles are unsigned
+### Ordinary profiles are unsigned
 
-Anyone can edit JSON provenance fields. Structural validation cannot establish authenticity. Enforcement workflows must create both profiles in a protected trusted job and must not accept contributor supplied profiles as policy evidence.
+Anyone can edit JSON provenance fields. Structural validation cannot establish authenticity. The post-review trusted-profile workflow can package one reviewed pair in a GitHub-attested bundle and verify its repository, workflow, commit, runner, image, and acquisition policy. It does not authenticate arbitrary local or contributor-supplied profiles. Enforcement workflows must create evidence from trusted source and must not accept contributor-supplied profiles as policy evidence.
 
 ### Observation is incomplete
 
-The parser covers selected system calls and one install lifecycle path. It does not capture file contents, ordinary in process environment reads, all network operations, every filesystem mutation, delayed behavior, or normal package runtime.
+The parser covers selected path and descriptor file calls, process activity, network operations, and timing calls across one install lifecycle path. It does not capture file contents, ordinary in-process environment reads, every syscall or protocol, all descriptor-sharing semantics, delayed behavior, or normal package runtime.
 
 ## Tool results
 

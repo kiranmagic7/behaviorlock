@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -34,6 +35,7 @@ const (
 const (
 	EvidenceMediaType = "application/vnd.behaviorlock.strace"
 	EvidenceFormat    = "strace-lines-v1"
+	ObservationPolicy = "strace-observation-v2"
 )
 
 type ToolInfo struct {
@@ -59,21 +61,22 @@ type CaptureCoverage struct {
 }
 
 type CaptureInfo struct {
-	RunnerImage      string            `json:"runnerImage,omitempty"`
-	RunnerImageID    string            `json:"runnerImageId,omitempty"`
-	Architecture     string            `json:"architecture,omitempty"`
-	NodeVersion      string            `json:"nodeVersion,omitempty"`
-	NPMVersion       string            `json:"npmVersion,omitempty"`
-	StraceVersion    string            `json:"straceVersion,omitempty"`
-	NetworkMode      string            `json:"networkMode"`
-	SandboxProfile   string            `json:"sandboxProfile"`
-	TraceIntegrity   string            `json:"traceIntegrity"`
-	Attestation      string            `json:"attestation"`
-	DurationMillis   int64             `json:"durationMillis,omitempty"`
-	Coverage         CaptureCoverage   `json:"coverage"`
-	Acquisition      *AcquisitionInfo  `json:"acquisition,omitempty"`
-	EvidenceArtifact *EvidenceArtifact `json:"evidenceArtifact,omitempty"`
-	Experimental     bool              `json:"experimental"`
+	RunnerImage       string            `json:"runnerImage,omitempty"`
+	RunnerImageID     string            `json:"runnerImageId,omitempty"`
+	Architecture      string            `json:"architecture,omitempty"`
+	NodeVersion       string            `json:"nodeVersion,omitempty"`
+	NPMVersion        string            `json:"npmVersion,omitempty"`
+	StraceVersion     string            `json:"straceVersion,omitempty"`
+	NetworkMode       string            `json:"networkMode"`
+	SandboxProfile    string            `json:"sandboxProfile"`
+	TraceIntegrity    string            `json:"traceIntegrity"`
+	ObservationPolicy string            `json:"observationPolicy"`
+	Attestation       string            `json:"attestation"`
+	DurationMillis    int64             `json:"durationMillis,omitempty"`
+	Coverage          CaptureCoverage   `json:"coverage"`
+	Acquisition       *AcquisitionInfo  `json:"acquisition,omitempty"`
+	EvidenceArtifact  *EvidenceArtifact `json:"evidenceArtifact,omitempty"`
+	Experimental      bool              `json:"experimental"`
 }
 
 type AcquisitionInfo struct {
@@ -107,17 +110,25 @@ type Result struct {
 }
 
 type Behavior struct {
-	Type       string        `json:"type"`
-	Operation  string        `json:"operation"`
-	Target     string        `json:"target"`
-	Arguments  []string      `json:"arguments,omitempty"`
-	Outcome    string        `json:"outcome"`
-	Errno      string        `json:"errno,omitempty"`
-	Sensitive  bool          `json:"sensitive,omitempty"`
-	Count      int           `json:"count"`
-	ID         string        `json:"id"`
-	Evidence   []EvidenceRef `json:"evidence"`
-	SourceCall string        `json:"sourceSyscall"`
+	Type       string           `json:"type"`
+	Operation  string           `json:"operation"`
+	Target     string           `json:"target"`
+	Arguments  []string         `json:"arguments,omitempty"`
+	Outcome    string           `json:"outcome"`
+	Errno      string           `json:"errno,omitempty"`
+	Sensitive  bool             `json:"sensitive,omitempty"`
+	Count      int              `json:"count"`
+	ID         string           `json:"id"`
+	Evidence   []EvidenceRef    `json:"evidence"`
+	Runtime    []RuntimeContext `json:"runtime,omitempty"`
+	SourceCall string           `json:"sourceSyscall"`
+}
+
+type RuntimeContext struct {
+	Process     string `json:"process"`
+	Parent      string `json:"parent,omitempty"`
+	Descriptor  string `json:"descriptor,omitempty"`
+	Attribution string `json:"attribution"`
 }
 
 type Profile struct {
@@ -165,10 +176,11 @@ func NewProfile(subject Subject, toolVersion string) Profile {
 		Tool:          ToolInfo{Name: "behaviorlock", Version: toolVersion},
 		Subject:       subject,
 		Capture: CaptureInfo{
-			NetworkMode:    "none",
-			SandboxProfile: "behaviorlock-linux-npm-v1",
-			TraceIntegrity: "isolated-root-tracer",
-			Attestation:    "none",
+			NetworkMode:       "none",
+			SandboxProfile:    "behaviorlock-linux-npm-v1",
+			TraceIntegrity:    "isolated-root-tracer",
+			ObservationPolicy: ObservationPolicy,
+			Attestation:       "none",
 			Coverage: CaptureCoverage{
 				Scope:        "registry-install-lifecycle",
 				Lifecycle:    []string{"preinstall", "install", "postinstall"},
@@ -191,10 +203,12 @@ func (p *Profile) Normalize() {
 	for _, behavior := range p.Behaviors {
 		behavior.Arguments = append([]string(nil), behavior.Arguments...)
 		behavior.Evidence = normalizeEvidenceRefs(behavior.Evidence)
+		behavior.Runtime = normalizeRuntimeContexts(behavior.Runtime)
 		key := BehaviorKey(behavior)
 		if existing, ok := counts[key]; ok {
 			existing.Count += max(behavior.Count, 1)
 			existing.Evidence = normalizeEvidenceRefs(append(existing.Evidence, behavior.Evidence...))
+			existing.Runtime = normalizeRuntimeContexts(append(existing.Runtime, behavior.Runtime...))
 			counts[key] = existing
 			continue
 		}
@@ -271,6 +285,27 @@ func normalizeEvidenceRefs(refs []EvidenceRef) []EvidenceRef {
 	return refs
 }
 
+func normalizeRuntimeContexts(contexts []RuntimeContext) []RuntimeContext {
+	unique := make(map[string]RuntimeContext, len(contexts))
+	for _, context := range contexts {
+		key := strings.Join([]string{context.Process, context.Parent, context.Descriptor, context.Attribution}, "\x1e")
+		unique[key] = context
+	}
+	contexts = make([]RuntimeContext, 0, len(unique))
+	for _, context := range unique {
+		contexts = append(contexts, context)
+	}
+	sort.Slice(contexts, func(i, j int) bool {
+		left := strings.Join([]string{contexts[i].Process, contexts[i].Parent, contexts[i].Descriptor, contexts[i].Attribution}, "\x1e")
+		right := strings.Join([]string{contexts[j].Process, contexts[j].Parent, contexts[j].Descriptor, contexts[j].Attribution}, "\x1e")
+		return left < right
+	})
+	if len(contexts) > maxEvidenceRefs {
+		contexts = contexts[:maxEvidenceRefs]
+	}
+	return contexts
+}
+
 func BehaviorKey(b Behavior) string {
 	return strings.Join([]string{
 		b.Type,
@@ -304,6 +339,7 @@ func (p Profile) StableDigest() (string, error) {
 	for index := range canonical.Behaviors {
 		canonical.Behaviors[index].Count = 1
 		canonical.Behaviors[index].Evidence = nil
+		canonical.Behaviors[index].Runtime = nil
 	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
@@ -361,6 +397,9 @@ func ValidateProfile(p Profile) error {
 	}
 	if p.Capture.Attestation != "none" {
 		return errors.New("unsupported profile attestation")
+	}
+	if p.Capture.ObservationPolicy != ObservationPolicy {
+		return errors.New("unsupported observation policy")
 	}
 	if !safeField(p.Capture.RunnerImage, 256) || !safeField(p.Capture.RunnerImageID, 256) ||
 		!safeField(p.Capture.Architecture, 64) || !safeField(p.Capture.NodeVersion, 64) ||
@@ -496,7 +535,11 @@ func validateBehavior(behavior Behavior, artifact *EvidenceArtifact) error {
 	allowedTypes := map[string]bool{
 		"filesystem.read": true, "filesystem.write": true, "filesystem.create": true,
 		"filesystem.delete": true, "filesystem.rename": true, "filesystem.permission": true,
-		"process.exec": true, "network.connect": true,
+		"filesystem.truncate": true, "filesystem.descriptor_write": true, "filesystem.enumerate": true,
+		"process.exec": true, "process.create": true, "process.memfd": true, "process.fileless_exec": true, "process.ptrace": true,
+		"network.connect": true, "network.socket": true, "network.send": true, "network.dns": true,
+		"network.bind": true, "network.listen": true, "network.accept": true,
+		"environment.timing": true,
 	}
 	if !allowedTypes[behavior.Type] || !safeField(behavior.Operation, 64) || behavior.Operation == "" {
 		return errors.New("type or operation is invalid")
@@ -529,7 +572,34 @@ func validateBehavior(behavior Behavior, artifact *EvidenceArtifact) error {
 			return errors.New("evidence reference is invalid")
 		}
 	}
+	if len(behavior.Runtime) > maxEvidenceRefs {
+		return errors.New("runtime attribution count is invalid")
+	}
+	for _, context := range behavior.Runtime {
+		if !validRuntimeProcess(context.Process) || (context.Parent != "" && !validRuntimeProcess(context.Parent)) ||
+			(context.Descriptor != "" && !validRuntimeDescriptor(context.Descriptor)) {
+			return errors.New("runtime attribution identifier is invalid")
+		}
+		switch context.Attribution {
+		case "direct", "descriptor", "unknown":
+		default:
+			return errors.New("runtime attribution mode is invalid")
+		}
+	}
 	return nil
+}
+
+func validRuntimeProcess(value string) bool {
+	if value == "root" {
+		return true
+	}
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	return err == nil && parsed > 0
+}
+
+func validRuntimeDescriptor(value string) bool {
+	parsed, err := strconv.ParseUint(value, 10, 31)
+	return err == nil && parsed <= 1_000_000
 }
 
 func validateEvidenceArtifact(artifact EvidenceArtifact) error {

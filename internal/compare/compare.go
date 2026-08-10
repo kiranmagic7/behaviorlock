@@ -43,6 +43,7 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 		"node version":           {baseline.Capture.NodeVersion, candidate.Capture.NodeVersion},
 		"npm version":            {baseline.Capture.NPMVersion, candidate.Capture.NPMVersion},
 		"strace version":         {baseline.Capture.StraceVersion, candidate.Capture.StraceVersion},
+		"observation policy":     {baseline.Capture.ObservationPolicy, candidate.Capture.ObservationPolicy},
 		"network mode":           {baseline.Capture.NetworkMode, candidate.Capture.NetworkMode},
 		"sandbox profile":        {baseline.Capture.SandboxProfile, candidate.Capture.SandboxProfile},
 		"coverage scope":         {baseline.Capture.Coverage.Scope, candidate.Capture.Coverage.Scope},
@@ -148,7 +149,20 @@ func classify(behavior model.Behavior) (string, string, string) {
 	switch behavior.Type {
 	case "network.connect":
 		return "high", "BL200", "new network connection attempt during an offline lifecycle run"
-	case "process.exec":
+	case "network.send":
+		return "high", "BL201", "new network send attempt during an offline lifecycle run"
+	case "network.dns":
+		return "high", "BL202", "new network send to port 53 during an offline lifecycle run"
+	case "network.bind", "network.listen":
+		return "high", "BL203", "new local network listener setup during an offline lifecycle run"
+	case "network.accept":
+		return "medium", "BL204", "new inbound connection acceptance attempt"
+	case "network.socket":
+		return "low", "BL205", "new network socket creation"
+	case "process.exec", "process.fileless_exec":
+		if behavior.Type == "process.fileless_exec" {
+			return "high", "BL303", "new descriptor-backed executable launch"
+		}
 		base := strings.ToLower(filepath.Base(behavior.Target))
 		highRisk := map[string]bool{
 			"sh": true, "bash": true, "dash": true, "zsh": true, "curl": true,
@@ -158,6 +172,12 @@ func classify(behavior model.Behavior) (string, string, string) {
 			return "high", "BL300", "new shell, downloader, or remote access process"
 		}
 		return "medium", "BL301", "new executable process"
+	case "process.create":
+		return "medium", "BL302", "new child process creation"
+	case "process.memfd":
+		return "high", "BL303", "new anonymous memory file creation"
+	case "process.ptrace":
+		return "medium", "BL304", "new process tracing or inspection attempt"
 	case "filesystem.write", "filesystem.create", "filesystem.rename":
 		if !allowedWriteTarget(behavior.Target) {
 			return "high", "BL400", "new filesystem mutation outside the disposable work and temporary roots"
@@ -165,11 +185,17 @@ func classify(behavior model.Behavior) (string, string, string) {
 		return "medium", "BL401", "new filesystem mutation"
 	case "filesystem.delete", "filesystem.permission":
 		return "medium", "BL402", "new destructive or permission changing filesystem operation"
+	case "filesystem.truncate", "filesystem.descriptor_write":
+		return "high", "BL403", "new truncation or descriptor-backed file mutation"
+	case "filesystem.enumerate":
+		return "low", "BL501", "new directory enumeration"
 	case "filesystem.read":
 		if isEnvironmentFingerprintPath(behavior.Target) {
 			return "medium", "BL600", "new access to a path commonly used to detect containers or tracing"
 		}
 		return "low", "BL500", "new filesystem read or metadata inspection"
+	case "environment.timing":
+		return "low", "BL601", "new clock inspection or requested delay observation"
 	default:
 		return "low", "BL900", "new observed behavior"
 	}

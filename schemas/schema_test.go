@@ -70,6 +70,43 @@ func TestProfileSchemaAcceptsGeneratedProfile(t *testing.T) {
 	}
 }
 
+func TestCurrentSchemasAcceptExpandedBehaviorWithRuntimeAttribution(t *testing.T) {
+	t.Parallel()
+	behavior := model.Behavior{
+		Type: "network.dns", Operation: "query", Target: "AF_INET:8.8.8.8:53",
+		Outcome: "blocked", Errno: "ENETUNREACH", Count: 1, SourceCall: "sendto",
+		Runtime: []model.RuntimeContext{{Process: "401", Parent: "400", Descriptor: "3", Attribution: "direct"}},
+	}
+	baseline := schemaProfile("1.0.0")
+	candidate := schemaProfile("1.1.0", behavior)
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(asJSONValue(t, candidate)); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := compare.Profiles(baseline, candidate, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCurrentProfileSchemaRejectsNumericRuntimeIdentifiers(t *testing.T) {
+	t.Parallel()
+	profile := schemaProfile("1.0.0", model.Behavior{
+		Type: "network.socket", Operation: "socket", Target: "AF_INET:SOCK_DGRAM:IPPROTO_IP",
+		Outcome: "success", Count: 1, SourceCall: "socket",
+		Runtime: []model.RuntimeContext{{Process: "401", Descriptor: "3", Attribution: "direct"}},
+	})
+	value := asJSONValue(t, profile).(map[string]any)
+	behaviors := value["behaviors"].([]any)
+	runtime := behaviors[0].(map[string]any)["runtime"].([]any)
+	runtime[0].(map[string]any)["process"] = float64(401)
+	if err := compileSchema(t, "profile-v2.schema.json").Validate(value); err == nil {
+		t.Fatal("schema accepted a numeric runtime process identifier")
+	}
+}
+
 func TestProfileSchemaRejectsContradictoryCompletion(t *testing.T) {
 	t.Parallel()
 	profile := schemaProfile("1.0.0")
@@ -152,7 +189,7 @@ func TestDiffSchemaAcceptsEnvironmentFingerprintAndOrdinaryReadRules(t *testing.
 	if len(diff.Added) != 2 || diff.Added[0].RuleID != "BL600" || diff.Added[1].RuleID != "BL500" {
 		t.Fatalf("unexpected rules: %#v", diff.Added)
 	}
-	if err := compileSchema(t, "diff-v1.schema.json").Validate(asJSONValue(t, diff)); err != nil {
+	if err := compileSchema(t, "diff-v2.schema.json").Validate(asJSONValue(t, diff)); err != nil {
 		t.Fatal(err)
 	}
 }

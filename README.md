@@ -35,10 +35,11 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 
 The current parser records a bounded subset of:
 
-1. File reads, writes, creation, deletion, renaming, and permission changes
-2. Executable launches and up to 32 visible arguments
-3. Network connection attempts
-4. Whether an observed call succeeded, failed, or was blocked
+1. Path- and descriptor-based file reads, writes, creation, truncation, deletion, renaming, permission changes, and directory enumeration
+2. Executable launches, child creation, anonymous memory files, descriptor-backed execution, and process inspection
+3. Socket creation, connection, UDP/DNS send, bind, listen, and acceptance attempts
+4. Selected clock inspection and requested delay calls
+5. Whether an observed call succeeded, failed, or was blocked, with bounded process, parent, descriptor, and attribution context
 
 The capture path exercises npm `preinstall`, `install`, and `postinstall` scripts through `npm rebuild`. It does not observe normal application runtime behavior.
 
@@ -122,7 +123,7 @@ Do not capture an unknown package on a machine that contains valuable data, cred
 
 ## Compare two captured versions
 
-Both profiles must describe the same package and use the same runner image ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, and coverage scope. Their companion evidence files must be present beside the profiles, or supplied with `--baseline-evidence` and `--candidate-evidence`.
+Both profiles must describe the same package and use the same runner image reference and ID, architecture, Node version, npm version, `strace` version, network mode, sandbox profile, coverage scope, and observation policy. Their companion evidence files must be present beside the profiles, or supplied with `--baseline-evidence` and `--candidate-evidence`.
 
 ```bash
 bin/behaviorlock compare \
@@ -141,15 +142,28 @@ The default threshold is `high`. Exit code `1` means an added observation reache
 | --- | --- | --- |
 | `BL100` | Critical | New access to a common credential or secret path |
 | `BL200` | High | New network connection attempt during offline execution |
+| `BL201` | High | New network send attempt during offline execution |
+| `BL202` | High | New network send to port 53 during offline execution; payload not decoded |
+| `BL203` | High | New bind or listener setup |
+| `BL204` | Medium | New inbound acceptance attempt |
+| `BL205` | Low | New socket creation |
 | `BL300` | High | New shell, downloader, or remote access process |
 | `BL301` | Medium | New executable process |
+| `BL302` | Medium | New child process creation |
+| `BL303` | High | New anonymous memory file or descriptor-backed execution |
+| `BL304` | Medium | New process tracing or inspection attempt |
 | `BL400` | High | New mutation outside disposable work and temporary roots |
 | `BL401` | Medium | New mutation inside a disposable writable root |
 | `BL402` | Medium | New deletion or permission change |
+| `BL403` | High | New truncation or descriptor-backed mutation |
 | `BL500` | Low | New file read or metadata inspection |
+| `BL501` | Low | New directory enumeration |
 | `BL600` | Medium | New access to a path commonly used to detect containers or tracing |
+| `BL601` | Low | New clock inspection or requested delay |
 
-`BL600` covers exact normalized paths such as `/.dockerenv`, `/run/.containerenv`, selected `/proc` environment fingerprints, and `/sys/class/dmi` or its descendants. Boundary matching prevents lookalike paths from receiving this rule. These reads can be legitimate diagnostics; the rule reports evidence for review and does not establish evasive or malicious intent. This version is path based and does not yet add `ptrace` or timing-call coverage.
+`BL600` covers exact normalized paths such as `/.dockerenv`, `/run/.containerenv`, selected `/proc` environment fingerprints, and `/sys/class/dmi` or its descendants. Boundary matching prevents lookalike paths from receiving this rule. These reads can be legitimate diagnostics; the rule reports evidence for review and does not establish evasive or malicious intent. Ptrace and timing observations have their own identifiers instead of changing the established meaning of `BL500` or `BL600`.
+
+The complete versioned registry and attribution rules are in [review rules](docs/RULES.md).
 
 The report exposes `reviewRequired` and `highestReviewLevel`; it does not issue a package verdict. The CLI threshold controls only the process exit code. No observed addition, or an exit code of `0`, authenticates the profiles, establishes full coverage, or proves safety.
 
@@ -205,12 +219,14 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 4. [Evidence model](docs/EVIDENCE_MODEL.md) defines retained artifacts, line references, validation, and privacy.
 5. [Acquisition proxy](docs/ACQUISITION_PROXY.md) defines registry egress enforcement and its residual risks.
 6. [Provenance and releases](docs/PROVENANCE_AND_RELEASES.md) defines trusted bundles, proof collection, SBOMs, signing, and disabled publication controls.
-7. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-8. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-9. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-10. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-11. [Roadmap](ROADMAP.md) contains the release gates.
-12. [Security policy](SECURITY.md) explains private vulnerability reporting.
+7. [Review rules](docs/RULES.md) defines the versioned rule registry, precedence, and attribution boundaries.
+7. [Review rules](docs/RULES.md) defines stable identifiers and non-verdict interpretation.
+8. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+9. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+10. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+11. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+12. [Roadmap](ROADMAP.md) contains the release gates.
+13. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 

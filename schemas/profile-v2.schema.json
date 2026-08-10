@@ -128,7 +128,7 @@
     },
     "capture": {
       "type": "object",
-      "required": ["networkMode", "sandboxProfile", "traceIntegrity", "attestation", "coverage", "experimental"],
+      "required": ["networkMode", "sandboxProfile", "traceIntegrity", "observationPolicy", "attestation", "coverage", "experimental"],
       "properties": {
         "runnerImage": { "type": "string", "minLength": 1, "maxLength": 256 },
         "runnerImageId": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -139,6 +139,7 @@
         "networkMode": { "enum": ["none", "unknown"] },
         "sandboxProfile": { "type": "string", "minLength": 1, "maxLength": 128 },
         "traceIntegrity": { "enum": ["isolated-root-tracer", "external-unverified"] },
+        "observationPolicy": { "const": "strace-observation-v2" },
         "attestation": { "const": "none" },
         "durationMillis": { "type": "integer", "minimum": 0 },
         "coverage": { "$ref": "#/$defs/coverage" },
@@ -246,8 +247,22 @@
             "filesystem.delete",
             "filesystem.rename",
             "filesystem.permission",
+            "filesystem.truncate",
+            "filesystem.descriptor_write",
+            "filesystem.enumerate",
             "process.exec",
-            "network.connect"
+            "process.create",
+            "process.memfd",
+            "process.fileless_exec",
+            "process.ptrace",
+            "network.connect",
+            "network.socket",
+            "network.send",
+            "network.dns",
+            "network.bind",
+            "network.listen",
+            "network.accept",
+            "environment.timing"
           ]
         },
         "operation": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -268,7 +283,23 @@
           "maxItems": 8,
           "items": { "$ref": "#/$defs/evidenceRef" }
         },
+        "runtime": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/runtimeContext" }
+        },
         "sourceSyscall": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "runtimeContext": {
+      "type": "object",
+      "required": ["process", "attribution"],
+      "properties": {
+        "process": { "type": "string", "pattern": "^(root|[1-9][0-9]*)$", "maxLength": 10 },
+        "parent": { "type": "string", "pattern": "^(root|[1-9][0-9]*)$", "maxLength": 10 },
+        "descriptor": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 7 },
+        "attribution": { "enum": ["direct", "descriptor", "unknown"] }
       },
       "additionalProperties": false
     }

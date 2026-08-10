@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    { "id": "BL100", "reviewLevel": "critical", "family": "credential-access", "description": "Access to a common credential or secret path" },
+    { "id": "BL200", "reviewLevel": "high", "family": "network-connect", "description": "Network connection attempt during offline lifecycle execution" },
+    { "id": "BL201", "reviewLevel": "high", "family": "network-send", "description": "Network send attempt during offline lifecycle execution" },
+    { "id": "BL202", "reviewLevel": "high", "family": "dns-send", "description": "Network send to port 53 during offline lifecycle execution; payload is not decoded" },
+    { "id": "BL203", "reviewLevel": "high", "family": "network-listener", "description": "Network bind or listen setup during offline lifecycle execution" },
+    { "id": "BL204", "reviewLevel": "medium", "family": "network-accept", "description": "Inbound connection acceptance attempt" },
+    { "id": "BL205", "reviewLevel": "low", "family": "network-socket", "description": "Network socket creation" },
+    { "id": "BL300", "reviewLevel": "high", "family": "sensitive-process", "description": "Shell, downloader, or remote access process" },
+    { "id": "BL301", "reviewLevel": "medium", "family": "process-exec", "description": "Executable process" },
+    { "id": "BL302", "reviewLevel": "medium", "family": "process-create", "description": "Child process creation" },
+    { "id": "BL303", "reviewLevel": "high", "family": "fileless-execution", "description": "Anonymous memory file creation or descriptor-backed execution" },
+    { "id": "BL304", "reviewLevel": "medium", "family": "process-inspection", "description": "Process tracing or inspection attempt" },
+    { "id": "BL400", "reviewLevel": "high", "family": "external-filesystem-mutation", "description": "Filesystem mutation outside disposable writable roots" },
+    { "id": "BL401", "reviewLevel": "medium", "family": "contained-filesystem-mutation", "description": "Filesystem mutation inside a disposable writable root" },
+    { "id": "BL402", "reviewLevel": "medium", "family": "destructive-filesystem-operation", "description": "Deletion or permission change" },
+    { "id": "BL403", "reviewLevel": "high", "family": "descriptor-filesystem-mutation", "description": "Truncation or descriptor-backed file mutation" },
+    { "id": "BL500", "reviewLevel": "low", "family": "filesystem-read", "description": "File read or metadata inspection" },
+    { "id": "BL501", "reviewLevel": "low", "family": "directory-enumeration", "description": "Directory enumeration" },
+    { "id": "BL600", "reviewLevel": "medium", "family": "environment-fingerprint", "description": "Access to a path commonly used to detect containers or tracing" },
+    { "id": "BL601", "reviewLevel": "low", "family": "timing-observation", "description": "Clock inspection or requested delay" },
+    { "id": "BL900", "reviewLevel": "low", "family": "unclassified-observation", "description": "Observed behavior without a more specific rule" }
+  ]
+}
