@@ -225,7 +225,7 @@ Checks one profile and its companion raw evidence, then prints the stable digest
 
 ## Resource limits
 
-The trace parser and evidence verifier accept at most 64 MiB of raw trace data, 256 KiB per parsed line, 250,000 recognized behaviors, and eight retained evidence references per normalized behavior. Profile JSON is limited to 32 MiB. Docker adds separate process, memory, CPU, file descriptor, shared memory, tmpfs, output, and wall clock limits.
+The trace parser and evidence verifier accept at most 64 MiB of raw trace data, 256 KiB per parsed line, 250,000 recognized behaviors, and eight retained evidence references per normalized behavior. Profile JSON is limited to 32 MiB. Docker adds separate process, memory, CPU, file descriptor, single-file, shared-memory, tmpfs, output, and wall-clock limits. An authoritative Docker OOM state produces `resource_exhausted`; timeout, cancellation, signal-style exit, truncation, and tracer failure remain distinct incomplete outcomes. See [resource boundaries and repeatability](RESOURCE_AND_REPEATABILITY.md).
 
 ## Reproducibility
 

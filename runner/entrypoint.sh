@@ -86,6 +86,21 @@ case "$mode" in
       sed -n '1,20p' /tmp/strace-error.log >&2
       exit 72
     fi
+    sentinel_start=false
+    sentinel_end=false
+    for trace_file in /trace/raw*; do
+      [ -f "$trace_file" ] || continue
+      if grep -F '/opt/behaviorlock/sentinel-start' "$trace_file" >/dev/null; then
+        sentinel_start=true
+      fi
+      if grep -F '/opt/behaviorlock/sentinel-end' "$trace_file" >/dev/null; then
+        sentinel_end=true
+      fi
+    done
+    if [ "$sentinel_start" != true ] || [ "$sentinel_end" != true ]; then
+      echo "trace sentinel evidence is incomplete" >&2
+      exit 72
+    fi
     printf 'BEHAVIORLOCK_TRACE_V1\n'
     merge_fifo="/trace/merge.$$"
     mkfifo "$merge_fifo"

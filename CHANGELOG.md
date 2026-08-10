@@ -26,6 +26,9 @@ All notable changes will be documented here. The project follows Keep a Changelo
 18. Versioned review-rule registry with stable identifiers for expanded observations
 19. UDP/DNS, listener, descriptor mutation, directory enumeration, process lineage, anonymous-memory execution, ptrace, and timing observation
 20. Bounded per-process descriptor and lineage context with explicit unknown attribution
+21. Distinct timeout, cancellation, signal, truncation, and authoritative Docker OOM result mapping
+22. Inert resource-boundary and real-tracer-death fixtures with cleanup assertions
+23. Ten-run semantic repeatability check that reports raw and count variance without suppression
 
 ### Changed
 
@@ -34,6 +37,7 @@ All notable changes will be documented here. The project follows Keep a Changelo
 3. Numeric `/proc/<pid>` paths now normalize to the literal `/proc/$PID` token instead of collapsing the pid segment.
 4. Profile compatibility now requires the same explicit observation-policy version.
 5. Capture retains per-process trace identity for review without making runtime identifiers part of semantic behavior identity or the stable digest.
+6. Execution now applies a 64 MiB per-file limit in addition to existing process, memory, descriptor, tmpfs, output, syscall, and wall-clock bounds.
 
 ### Security
 

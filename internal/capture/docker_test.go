@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 		}
 	}
 	joined := strings.Join(arguments, " ")
-	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "--cap-add SYS_PTRACE", "no-new-privileges:true", "--pids-limit 128", "/trace:rw,nosuid,nodev,noexec"} {
+	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "--cap-add SYS_PTRACE", "no-new-privileges:true", "--pids-limit 128", "fsize=67108864:67108864", "/trace:rw,nosuid,nodev,noexec"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("trace arguments missing %q: %s", required, joined)
 		}
@@ -116,6 +117,55 @@ func TestBoundedBufferReportsTruncation(t *testing.T) {
 	}
 	if got := string(buffer.Bytes()); got != "abcd" || !buffer.Truncated() {
 		t.Fatalf("bounded buffer = %q truncated=%t", got, buffer.Truncated())
+	}
+}
+
+func TestClassifyTraceFailureKeepsBoundaryOutcomesDistinct(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		contextErr error
+		result     commandResult
+		runErr     error
+		state      *containerState
+		status     string
+		timedOut   bool
+		truncated  bool
+	}{
+		{name: "timeout", contextErr: context.DeadlineExceeded, status: "timed_out", timedOut: true},
+		{name: "cancellation", contextErr: context.Canceled, status: "trace_incomplete"},
+		{name: "authoritative oom", result: commandResult{ExitCode: 137}, state: &containerState{OOMKilled: true, ExitCode: 137}, status: "resource_exhausted"},
+		{name: "signal style but not oom", result: commandResult{ExitCode: 137}, state: &containerState{ExitCode: 137}, status: "trace_incomplete"},
+		{name: "output truncation", result: commandResult{Truncated: true}, status: "trace_incomplete", truncated: true},
+		{name: "docker execution error", runErr: errors.New("docker unavailable"), status: "trace_incomplete"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := classifyTraceFailure(test.contextErr, test.result, test.runErr, test.state)
+			if err == nil || result.Status != test.status || result.TimedOut != test.timedOut || result.Truncated != test.truncated {
+				t.Fatalf("classification = %#v err=%v", result, err)
+			}
+		})
+	}
+	if result, err := classifyTraceFailure(nil, commandResult{}, nil, nil); err != nil || result.Status != "" {
+		t.Fatalf("successful trace was classified as failure: %#v err=%v", result, err)
+	}
+}
+
+func TestInspectContainerStateRequiresValidDockerState(t *testing.T) {
+	t.Parallel()
+	runner := &DockerRunner{dockerPath: "docker"}
+	runner.run = func(_ context.Context, arguments []string, _, _ int64) (commandResult, error) {
+		if strings.Join(arguments, " ") != "inspect --format {{json .State}} behaviorlock-trace-test" {
+			t.Fatalf("unexpected inspect arguments: %q", arguments)
+		}
+		return commandResult{Stdout: []byte(`{"OOMKilled":true,"ExitCode":137,"Error":""}`)}, nil
+	}
+	state, err := runner.inspectContainerState("behaviorlock-trace-test")
+	if err != nil || !state.OOMKilled || state.ExitCode != 137 {
+		t.Fatalf("state = %#v err=%v", state, err)
 	}
 }
 

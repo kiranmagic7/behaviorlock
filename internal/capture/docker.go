@@ -66,6 +66,12 @@ type commandResult struct {
 	ExitCode  int
 }
 
+type containerState struct {
+	OOMKilled bool   `json:"OOMKilled"`
+	ExitCode  int    `json:"ExitCode"`
+	Error     string `json:"Error"`
+}
+
 type cleanupTargets struct {
 	containers []string
 	images     []string
@@ -214,17 +220,15 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	duration := time.Since(started)
 	profile.Capture.DurationMillis = duration.Milliseconds()
 
-	if errors.Is(captureContext.Err(), context.DeadlineExceeded) {
-		profile.Result = model.Result{Status: "timed_out", ExitCode: 2, TimedOut: true, Message: "capture exceeded its wall clock limit"}
-		return profile, nil, errors.New("capture timed out and was marked incomplete")
+	var inspectedState *containerState
+	if captureContext.Err() == nil && (runErr != nil || traced.ExitCode != 0) {
+		if state, inspectErr := runner.inspectContainerState(traceContainer); inspectErr == nil {
+			inspectedState = &state
+		}
 	}
-	if runErr != nil || traced.ExitCode != 0 {
-		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Message: safeDiagnostic(traced.Stderr)}
-		return profile, nil, fmt.Errorf("trace container failed before a verified completion marker")
-	}
-	if traced.Truncated {
-		profile.Result = model.Result{Status: "trace_incomplete", ExitCode: 2, Truncated: true, Message: "trace output exceeded the capture limit"}
-		return profile, nil, errors.New("trace output was truncated and cannot produce a complete profile")
+	if result, failure := classifyTraceFailure(captureContext.Err(), traced, runErr, inspectedState); failure != nil {
+		profile.Result = result
+		return profile, nil, failure
 	}
 	parsed, raw, commandExit, err := trace.ParseEnvelope(traced.Stdout)
 	if err != nil {
@@ -240,6 +244,46 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	}
 	profile.Normalize()
 	return profile, raw, nil
+}
+
+func classifyTraceFailure(contextErr error, traced commandResult, runErr error, state *containerState) (model.Result, error) {
+	if errors.Is(contextErr, context.DeadlineExceeded) {
+		return model.Result{Status: "timed_out", ExitCode: 2, TimedOut: true, Message: "capture exceeded its wall clock limit"},
+			errors.New("capture timed out and was marked incomplete")
+	}
+	if errors.Is(contextErr, context.Canceled) {
+		return model.Result{Status: "trace_incomplete", ExitCode: 2, Message: "capture was cancelled before completion"},
+			errors.New("capture was cancelled and marked incomplete")
+	}
+	if state != nil && state.OOMKilled {
+		return model.Result{Status: "resource_exhausted", ExitCode: 2, Message: "trace container exceeded its memory limit"},
+			errors.New("trace container was OOM-killed and marked resource exhausted")
+	}
+	if traced.Truncated {
+		return model.Result{Status: "trace_incomplete", ExitCode: 2, Truncated: true, Message: "trace output exceeded the capture limit"},
+			errors.New("trace output was truncated and cannot produce a complete profile")
+	}
+	if runErr != nil || traced.ExitCode != 0 {
+		exitCode := traced.ExitCode
+		message := safeDiagnostic(traced.Stderr)
+		if state != nil {
+			if state.ExitCode != 0 {
+				exitCode = state.ExitCode
+			}
+			if message == "" {
+				message = safeDiagnostic([]byte(state.Error))
+			}
+		}
+		if exitCode >= 128 {
+			message = fmt.Sprintf("trace supervisor ended with signal-style exit code %d", exitCode)
+		}
+		if message == "" {
+			message = "trace container exited before a verified completion marker"
+		}
+		return model.Result{Status: "trace_incomplete", ExitCode: 2, Message: message},
+			errors.New("trace container failed before a verified completion marker")
+	}
+	return model.Result{}, nil
 }
 
 func withoutEvidence(profile model.Profile, err error) (model.Profile, []byte, error) {
@@ -320,6 +364,7 @@ func buildTraceArgs(containerName, image, packageSpec string) []string {
 		"--cpus", "1",
 		"--ulimit", "nofile=1024:1024",
 		"--ulimit", "nproc=128:128",
+		"--ulimit", "fsize=67108864:67108864",
 		"--ulimit", "core=0:0",
 		"--shm-size", "16m",
 		"--ipc", "none",
@@ -444,6 +489,23 @@ func (runner *DockerRunner) retireAcquisition(ctx context.Context, preparationCo
 		}
 	}
 	return nil
+}
+
+func (runner *DockerRunner) inspectContainerState(containerName string) (containerState, error) {
+	inspectContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := runner.run(inspectContext, []string{"inspect", "--format", "{{json .State}}", containerName}, 64<<10, 64<<10)
+	if err != nil || result.ExitCode != 0 || result.Truncated {
+		return containerState{}, fmt.Errorf("inspect trace container state: %s", safeDiagnostic(result.Stderr))
+	}
+	var state containerState
+	if err := json.Unmarshal(result.Stdout, &state); err != nil {
+		return containerState{}, fmt.Errorf("decode trace container state: %w", err)
+	}
+	if state.ExitCode < 0 || state.ExitCode > 255 || len(state.Error) > 4096 {
+		return containerState{}, errors.New("trace container state is invalid")
+	}
+	return state, nil
 }
 
 func (runner *DockerRunner) imageDetails(ctx context.Context, image string) (string, string, error) {

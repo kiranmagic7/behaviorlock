@@ -220,12 +220,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 5. [Acquisition proxy](docs/ACQUISITION_PROXY.md) defines registry egress enforcement and its residual risks.
 6. [Provenance and releases](docs/PROVENANCE_AND_RELEASES.md) defines trusted bundles, proof collection, SBOMs, signing, and disabled publication controls.
 7. [Review rules](docs/RULES.md) defines the versioned rule registry, precedence, and attribution boundaries.
-8. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-9. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-10. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-11. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-12. [Roadmap](ROADMAP.md) contains the release gates.
-13. [Security policy](SECURITY.md) explains private vulnerability reporting.
+8. [Resource boundaries and repeatability](docs/RESOURCE_AND_REPEATABILITY.md) defines exhaustion outcomes, cleanup, and the ten-run semantic stability gate.
+9. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+10. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+11. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+12. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+13. [Roadmap](ROADMAP.md) contains the release gates.
+14. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 
@@ -244,7 +245,7 @@ The protected `ci-required` job runs race enabled tests, shell checks, schema ch
 
 ## Project status
 
-BehaviorLock is a public experiment with no tagged release. The parser and comparison core are usable now. The capture backend remains experimental until every adversarial gate in [ROADMAP.md](ROADMAP.md) passes and trusted profiles have verifiable provenance. The acquisition proxy implementation still needs hosted proof and review before gate 6 can close.
+BehaviorLock is a public experiment with no tagged release. The parser and comparison core are usable now. The capture backend remains experimental until every adversarial gate in [ROADMAP.md](ROADMAP.md) passes and trusted profiles have verifiable provenance. The acquisition proxy has hosted draft-branch proof, but gate 6 still requires maintainer review and merge to protected `main`.
 
 Profiles and reports can retain sensitive paths and package controlled strings. Review every artifact before attaching it to an issue, publishing it, or committing it.
 

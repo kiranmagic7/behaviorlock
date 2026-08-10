@@ -45,7 +45,7 @@ Lifecycle execution has a read only root filesystem and no host mounts. Writable
 
 ### Resource exhaustion
 
-Docker bounds memory, process count, CPU, file descriptors, shared memory, and runtime tmpfs size. The supervisor enforces an overall wall clock timeout and output limits. Docker does not provide a portable overlay disk quota for preparation, so acquisition still belongs on a disposable runner. Cleanup targets only cryptographically random container and image names created for the current run and uses a bounded cleanup context.
+Docker bounds memory, process count, CPU, file descriptors, single-file size, shared memory, and runtime tmpfs size. The supervisor enforces an overall wall-clock timeout and output limits. Docker's authoritative OOM state is inspected before cleanup; exit code 137 alone is never treated as proof of OOM. Docker does not provide a portable overlay disk quota for preparation, so acquisition still belongs on a disposable runner. Cleanup targets only cryptographically random container, image, volume, and network names created for the current run and uses a bounded cleanup context.
 
 ### Trace tampering
 
