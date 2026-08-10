@@ -1,0 +1,84 @@
+name: BehaviorLock dependency review capture
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+    paths:
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: behaviorlock-review-capture-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      threshold-reached: ${{ steps.review.outputs.threshold-reached }}
+      highest-review-level: ${{ steps.review.outputs.highest-review-level }}
+      added-count: ${{ steps.review.outputs.added-count }}
+      skipped: ${{ steps.review.outputs.skipped || steps.installed.outputs.skipped }}
+      baseline-profile-path: ${{ steps.review.outputs.baseline-profile-path }}
+      baseline-evidence-path: ${{ steps.review.outputs.baseline-evidence-path }}
+      candidate-profile-path: ${{ steps.review.outputs.candidate-profile-path }}
+      candidate-evidence-path: ${{ steps.review.outputs.candidate-evidence-path }}
+      diff-path: ${{ steps.review.outputs.diff-path }}
+    steps:
+      - name: Check out trusted base revision only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect base-installed review implementation
+        id: installed
+        shell: bash
+        run: |
+          if test -f .github/actions/dependency-review/action.yml && test -d internal/reviewci; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+            echo 'skipped=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'skipped=true' >> "$GITHUB_OUTPUT"
+            echo 'Dependency review is not yet installed on the trusted base revision.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Go
+        if: steps.installed.outputs.available == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.23.x
+          cache: false
+
+      - name: Capture dependency behavior from public registry versions
+        id: review
+        if: steps.installed.outputs.available == 'true'
+        uses: ./.github/actions/dependency-review
+        with:
+          github-token: ${{ github.token }}
+          event-path: ${{ github.event_path }}
+          output-directory: ${{ runner.temp }}/behaviorlock-review
+          review-threshold: high
+
+      - name: Upload data-only review artifact
+        if: steps.installed.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: behaviorlock-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/behaviorlock-review
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 3
+          compression-level: 6
+          overwrite: false

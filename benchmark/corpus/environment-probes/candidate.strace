@@ -1,0 +1,4 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
+openat(AT_FDCWD, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 3
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=1, tv_nsec=2}) = 0
++++ exited with 0 +++

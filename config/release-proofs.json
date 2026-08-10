@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "maxAgeHours": 24,
+  "proofs": [
+    { "id": "gate-01", "check": "gate-01-input-validation", "description": "Reject unsafe package specifications before Docker starts" },
+    { "id": "gate-02", "check": "gate-02-docker-argument-integrity", "description": "Keep package input out of Docker control arguments" },
+    { "id": "gate-03", "check": "gate-03-host-secret-isolation", "description": "Exclude host credentials and configuration" },
+    { "id": "gate-04", "check": "gate-04-filesystem-containment", "description": "Enforce read-only roots and writable disposable work areas" },
+    { "id": "gate-05", "check": "gate-05-lifecycle-network-denial", "description": "Deny lifecycle TCP, UDP, DNS, private, gateway, and metadata access" },
+    { "id": "gate-06", "check": "gate-06-acquisition-egress", "description": "Constrain acquisition to the exact public npm registry authority" },
+    { "id": "gate-07", "check": "gate-07-process-observability", "description": "Observe child, grandchild, native, and shell execution" },
+    { "id": "gate-08", "check": "gate-08-tracer-fail-closed", "description": "Fail incomplete when the tracer dies or emits diagnostics" },
+    { "id": "gate-09", "check": "gate-09-trace-channel-integrity", "description": "Keep forged syscalls, controls, and workflow commands out of evidence" },
+    { "id": "gate-10", "check": "gate-10-resource-exhaustion", "description": "Bound process, memory, descriptor, file, output, syscall, and time use" },
+    { "id": "gate-11", "check": "gate-11-unsupported-tracing", "description": "Fail closed without broad privilege or host namespaces" },
+    { "id": "gate-12", "check": "gate-12-determinism", "description": "Produce one behavior set and stable digest across ten trusted runs" },
+    { "id": "gate-13", "check": "gate-13-retained-evidence", "description": "Link every added item to verified retained raw evidence" },
+    { "id": "gate-14", "check": "gate-14-trusted-profile-provenance", "description": "Verify provenance before cross-workflow policy use" }
+  ]
+}

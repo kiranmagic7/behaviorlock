@@ -1,0 +1,5 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
+openat(AT_FDCWD, "/work/package.json", O_RDONLY|O_CLOEXEC) = 3
+openat(AT_FDCWD, "/home/scanner/.ssh/id_rsa", O_RDONLY|O_CLOEXEC) = -1 EACCES (Permission denied)
+connect(5, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("198.51.100.1")}, 16) = -1 ENETUNREACH (Network is unreachable)
++++ exited with 0 +++

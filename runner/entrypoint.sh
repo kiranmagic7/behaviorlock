@@ -3,6 +3,7 @@ set -eu
 
 mode="${1:-}"
 package_spec="${2:-}"
+phase="${3:-lifecycle}"
 
 case "$mode" in
   prepare)
@@ -10,36 +11,83 @@ case "$mode" in
       echo "prepare mode must run as uid 65532" >&2
       exit 70
     fi
+    rm -f /tmp/behaviorlock-relay-ready
+    node /opt/behaviorlock/proxy-relay.mjs >/tmp/behaviorlock-relay.log 2>&1 &
+    relay_pid=$!
+    cleanup_relay() {
+      kill "$relay_pid" 2>/dev/null || true
+      wait "$relay_pid" 2>/dev/null || true
+    }
+    trap cleanup_relay EXIT
+    trap 'exit 130' HUP INT TERM
+    relay_ready=false
+    relay_attempt=0
+    while [ "$relay_attempt" -lt 100 ]; do
+      if [ -f /tmp/behaviorlock-relay-ready ]; then
+        relay_ready=true
+        break
+      fi
+      relay_attempt=$((relay_attempt + 1))
+      sleep 0.05
+    done
+    if [ "$relay_ready" != true ]; then
+      echo "acquisition proxy relay did not become ready" >&2
+      sed -n '1,20p' /tmp/behaviorlock-relay.log >&2
+      exit 71
+    fi
     cd /seed
     npm init --yes >/dev/null 2>&1
     npm install --ignore-scripts --save-exact --package-lock=true --no-audit --no-fund -- "$package_spec" >/tmp/behaviorlock-prepare.log 2>&1
     metadata="$(node /opt/behaviorlock/metadata.mjs "$package_spec")"
     printf 'BEHAVIORLOCK_PREP_V1 %s\n' "$metadata"
+    cleanup_relay
+    trap - EXIT HUP INT TERM
     ;;
   trace)
     if [ "$(id -u)" -ne 0 ]; then
       echo "trace supervisor must run as uid 0" >&2
       exit 70
     fi
+    case "${BEHAVIORLOCK_SINKHOLE_ENABLED:-0}" in
+      0) ;;
+      1)
+        expected_resolver='nameserver 127.0.0.1
+options timeout:1 attempts:1'
+        if [ "$(cat /etc/resolv.conf)" != "$expected_resolver" ]; then
+          echo "sinkhole resolver configuration was not inherited" >&2
+          exit 74
+        fi
+        ;;
+      *) echo "invalid sinkhole selection" >&2; exit 64 ;;
+    esac
     su -s /bin/sh scanner -c 'cp -a /seed/. /work/'
-    # The child shell must expand HOME after su changes identity.
+    : "${BEHAVIORLOCK_CANARY_SSH:?missing ssh canary}"
+    : "${BEHAVIORLOCK_CANARY_AWS_FILE:?missing aws file canary}"
+    : "${BEHAVIORLOCK_CANARY_DOCKER:?missing docker canary}"
+    : "${BEHAVIORLOCK_CANARY_NPM_FILE:?missing npm canary}"
+    # The child shell expands HOME and the canary variables after su changes identity.
     # shellcheck disable=SC2016
     su -s /bin/sh scanner -c '
       mkdir -p "$HOME/.ssh" "$HOME/.aws" "$HOME/.docker" "$HOME/.config/gcloud" "$HOME/.npm"
-      printf "BEHAVIORLOCK_CANARY_DO_NOT_USE\n" > "$HOME/.ssh/id_rsa"
-      printf "BEHAVIORLOCK_CANARY_DO_NOT_USE\n" > "$HOME/.aws/credentials"
-      printf "{\"auths\":{\"canary.invalid\":{\"auth\":\"BEHAVIORLOCK_CANARY\"}}}\n" > "$HOME/.docker/config.json"
-      printf "//registry.npmjs.org/:_authToken=BEHAVIORLOCK_CANARY\n" > "$HOME/.npmrc"
+      printf "%s\n" "$BEHAVIORLOCK_CANARY_SSH" > "$HOME/.ssh/id_rsa"
+      printf "[default]\naws_access_key_id=%s\n" "$BEHAVIORLOCK_CANARY_AWS_FILE" > "$HOME/.aws/credentials"
+      printf "{\"auths\":{\"canary.invalid\":{\"auth\":\"%s\"}}}\n" "$BEHAVIORLOCK_CANARY_DOCKER" > "$HOME/.docker/config.json"
+      printf "//registry.npmjs.org/:_authToken=%s\n" "$BEHAVIORLOCK_CANARY_NPM_FILE" > "$HOME/.npmrc"
       chmod 0400 "$HOME/.ssh/id_rsa" "$HOME/.aws/credentials" "$HOME/.docker/config.json" "$HOME/.npmrc"
     '
+    case "$phase" in
+      lifecycle) phase_script=/opt/behaviorlock/lifecycle.sh ;;
+      import) phase_script=/opt/behaviorlock/import.sh ;;
+      *) echo "unsupported capture phase" >&2; exit 64 ;;
+    esac
     set +e
     # The traced child shell expands its positional argument.
     # shellcheck disable=SC2016
-    strace -u scanner -ff -qq -s 4096 -yy \
-      -e trace=%file,%process,%network \
+    strace -u scanner -ff -qq -ttt -s 4096 -yy \
+      -e trace=%file,%process,%network,ftruncate,mmap,getdents,getdents64,memfd_create,ptrace,clock_gettime,clock_getres,gettimeofday,time,nanosleep,clock_nanosleep,dup,dup2,dup3,fcntl,close \
       -o /trace/raw \
-      -- /bin/sh -c 'exec /opt/behaviorlock/lifecycle.sh "$1" > /tmp/package-output.log 2>&1' \
-      behaviorlock-lifecycle "$package_spec" \
+      -- /bin/sh -c 'exec "$1" "$2" > /tmp/package-output.log 2>&1' \
+      behaviorlock-phase "$phase_script" "$package_spec" \
       2> /tmp/strace-error.log
     command_exit=$?
     set -e
@@ -60,19 +108,90 @@ case "$mode" in
       sed -n '1,20p' /tmp/strace-error.log >&2
       exit 72
     fi
-    printf 'BEHAVIORLOCK_TRACE_V1\n'
+    sentinel_start=false
+    sentinel_end=false
     for trace_file in /trace/raw*; do
       [ -f "$trace_file" ] || continue
-      cat "$trace_file"
+      if grep -F '/opt/behaviorlock/sentinel-start' "$trace_file" >/dev/null; then
+        sentinel_start=true
+      fi
+      if grep -F '/opt/behaviorlock/sentinel-end' "$trace_file" >/dev/null; then
+        sentinel_end=true
+      fi
     done
+    if [ "$sentinel_start" != true ] || [ "$sentinel_end" != true ]; then
+      echo "trace sentinel evidence is incomplete" >&2
+      exit 72
+    fi
+    printf 'BEHAVIORLOCK_TRACE_V1\n'
+    merge_fifo="/trace/merge.$$"
+    mkfifo "$merge_fifo"
+    (
+      for trace_file in /trace/raw*; do
+        [ -f "$trace_file" ] || continue
+        trace_pid="${trace_file##*.}"
+        case "$trace_pid" in
+          *[!0-9]*|'')
+            echo "strace output filename did not contain a numeric pid" >&2
+            exit 72
+            ;;
+        esac
+        awk -v trace_pid="$trace_pid" '{ print "[pid " trace_pid "] " $0 }' "$trace_file" || exit 72
+      done
+    ) > "$merge_fifo" &
+    merge_pid=$!
+    if ! LC_ALL=C sort -s -n -k3,3 "$merge_fifo"; then
+      kill "$merge_pid" 2>/dev/null || true
+      wait "$merge_pid" 2>/dev/null || true
+      echo "failed to merge per-process trace files" >&2
+      exit 72
+    fi
+    if ! wait "$merge_pid"; then
+      echo "failed to prefix per-process trace files" >&2
+      exit 72
+    fi
+    rm -f "$merge_fifo"
     printf '\nBEHAVIORLOCK_TRACE_END exit=%s\n' "$command_exit"
+    ;;
+  proxy)
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "proxy supervisor must start as uid 0" >&2
+      exit 70
+    fi
+    chmod 0700 /proxy
+    chown 65532:65532 /proxy
+    exec setpriv \
+      --reuid=65532 \
+      --regid=65532 \
+      --clear-groups \
+      --inh-caps=-all \
+      --ambient-caps=-all \
+      --bounding-set=-all \
+      --no-new-privs \
+      node /opt/behaviorlock/proxy.mjs
+    ;;
+  sinkhole)
+    if [ "$(id -u)" -ne 65532 ]; then
+      echo "sinkhole must run as uid 65532" >&2
+      exit 70
+    fi
+    exec node /opt/behaviorlock/sinkhole.mjs
+    ;;
+  resolver)
+    if [ "$(id -u)" -ne 0 ] || [ ! -d /resolver ]; then
+      echo "resolver initializer requires uid 0 and its private volume" >&2
+      exit 70
+    fi
+    umask 077
+    printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /resolver/resolv.conf
+    chmod 0444 /resolver/resolv.conf
     ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \
       "$(node --version)" "$(npm --version)" "$(strace --version | sed -n '1s/^strace -- version //p')"
     ;;
   *)
-    echo "usage: entrypoint.sh prepare|trace|version package@version" >&2
+    echo "usage: entrypoint.sh prepare|trace|proxy|sinkhole|resolver|version package@version [lifecycle|import]" >&2
     exit 64
     ;;
 esac

@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "corpusPolicy": {
+    "sampleClass": "inert-reconstruction-only",
+    "networkPolicy": "offline-trace-replay",
+    "prohibitedContent": [
+      "live malware",
+      "preserved malicious packages",
+      "proprietary samples",
+      "active probing instructions"
+    ]
+  },
+  "cases": [
+    {
+      "id": "credential-network",
+      "title": "Credential path access and blocked network connection",
+      "observedPhase": "external",
+      "reconstructionStatus": "inert-handwritten",
+      "baseline": {
+        "package": "benchmark-credential-network@1.0.0",
+        "trace": "corpus/credential-network/baseline.strace"
+      },
+      "candidate": {
+        "package": "benchmark-credential-network@1.1.0",
+        "trace": "corpus/credential-network/candidate.strace"
+      },
+      "citations": [
+        {
+          "title": "MITRE ATT&CK T1552.004: Unsecured Credentials — Private Keys",
+          "url": "https://attack.mitre.org/techniques/T1552/004/",
+          "relationship": "behavior-family-reference"
+        }
+      ],
+      "expected": {
+        "addedBehaviorTypes": ["filesystem.read", "network.connect"],
+        "ruleIds": ["BL100", "BL200"],
+        "highestReviewLevel": "critical"
+      },
+      "unsupportedSignals": [
+        "File contents and intent are not observed.",
+        "A blocked connection attempt does not prove data transfer."
+      ]
+    },
+    {
+      "id": "process-filesystem",
+      "title": "Shell execution and blocked external filesystem mutation",
+      "observedPhase": "external",
+      "reconstructionStatus": "inert-handwritten",
+      "baseline": {
+        "package": "benchmark-process-filesystem@1.0.0",
+        "trace": "corpus/process-filesystem/baseline.strace"
+      },
+      "candidate": {
+        "package": "benchmark-process-filesystem@1.1.0",
+        "trace": "corpus/process-filesystem/candidate.strace"
+      },
+      "citations": [
+        {
+          "title": "MITRE ATT&CK T1059: Command and Scripting Interpreter",
+          "url": "https://attack.mitre.org/techniques/T1059/",
+          "relationship": "behavior-family-reference"
+        }
+      ],
+      "expected": {
+        "addedBehaviorTypes": ["filesystem.write", "process.exec"],
+        "ruleIds": ["BL300", "BL400"],
+        "highestReviewLevel": "high"
+      },
+      "unsupportedSignals": [
+        "The inert shell command performs no harmful action.",
+        "A write attempt is not proof of persistence or intent."
+      ]
+    },
+    {
+      "id": "dns-fileless",
+      "title": "DNS send and descriptor-backed execution primitives",
+      "observedPhase": "external",
+      "reconstructionStatus": "inert-handwritten",
+      "baseline": {
+        "package": "benchmark-dns-fileless@1.0.0",
+        "trace": "corpus/dns-fileless/baseline.strace"
+      },
+      "candidate": {
+        "package": "benchmark-dns-fileless@1.1.0",
+        "trace": "corpus/dns-fileless/candidate.strace"
+      },
+      "citations": [
+        {
+          "title": "MITRE ATT&CK T1071.004: Application Layer Protocol — DNS",
+          "url": "https://attack.mitre.org/techniques/T1071/004/",
+          "relationship": "behavior-family-reference"
+        },
+        {
+          "title": "MITRE ATT&CK T1620: Reflective Code Loading",
+          "url": "https://attack.mitre.org/techniques/T1620/",
+          "relationship": "behavior-family-reference"
+        }
+      ],
+      "expected": {
+        "addedBehaviorTypes": ["network.dns", "network.socket", "process.fileless_exec", "process.memfd"],
+        "ruleIds": ["BL202", "BL205", "BL303"],
+        "highestReviewLevel": "high"
+      },
+      "unsupportedSignals": [
+        "DNS payloads are not decoded.",
+        "The descriptor-backed execution attempt is blocked and carries no executable payload."
+      ]
+    },
+    {
+      "id": "environment-probes",
+      "title": "Container and timing observations",
+      "observedPhase": "external",
+      "reconstructionStatus": "inert-handwritten",
+      "baseline": {
+        "package": "benchmark-environment-probes@1.0.0",
+        "trace": "corpus/environment-probes/baseline.strace"
+      },
+      "candidate": {
+        "package": "benchmark-environment-probes@1.1.0",
+        "trace": "corpus/environment-probes/candidate.strace"
+      },
+      "citations": [
+        {
+          "title": "MITRE ATT&CK T1497.001: Virtualization/Sandbox Evasion — System Checks",
+          "url": "https://attack.mitre.org/techniques/T1497/001/",
+          "relationship": "behavior-family-reference"
+        }
+      ],
+      "expected": {
+        "addedBehaviorTypes": ["environment.timing", "filesystem.read"],
+        "ruleIds": ["BL600", "BL601"],
+        "highestReviewLevel": "medium"
+      },
+      "unsupportedSignals": [
+        "System and clock reads are common and do not establish evasion.",
+        "BehaviorLock does not infer intent from an environment probe."
+      ]
+    }
+  ],
+  "projectedHistoricalCoverage": [
+    {
+      "id": "coa-2021",
+      "title": "Compromised coa npm versions",
+      "status": "projection-only",
+      "fixtureIds": ["process-filesystem"],
+      "citations": [
+        {
+          "title": "GitHub Advisory GHSA-73qr-pfmq-6rp8: Embedded malware in coa",
+          "url": "https://github.com/advisories/GHSA-73qr-pfmq-6rp8",
+          "relationship": "incident-identity"
+        },
+        {
+          "title": "coa issue 99: Last release contains malicious code",
+          "url": "https://github.com/veged/coa/issues/99",
+          "relationship": "public-report-of-preinstall-process"
+        }
+      ],
+      "limitations": [
+        "No affected coa package, archive, or code was downloaded or executed.",
+        "The fixture reconstructs only a generic lifecycle shell and filesystem-attempt family.",
+        "A fixture match is not evidence that BehaviorLock would have detected every affected version or consequence."
+      ]
+    }
+  ]
+}

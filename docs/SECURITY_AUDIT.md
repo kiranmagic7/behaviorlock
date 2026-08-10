@@ -10,6 +10,18 @@
 | Release status | Experimental, no tag |
 | Overall decision | Suitable for continued public experimentation after the fixes in this change. Not approved as a malware sandbox or stable security product. |
 
+The schema v2 retained-evidence work was implemented after this reviewed base. Its local regression suite checks whole-artifact and exact-line tamper rejection, but it does not inherit this audit decision. A new review and hosted evidence are required before release gate 13 can be closed.
+
+The acquisition proxy work was also implemented after this reviewed base. Preparation now uses network mode `none` and reaches an exact-registry proxy through a private Unix socket. Its post-review draft branch passed hosted direct-egress denial, exact-registry allowance, off-registry rejection, unprivileged-runtime, cleanup, and hardened integration checks. Those results do not inherit or replace the audit decision above; gate 6 still requires maintainer review and merge to the protected branch.
+
+The expanded observation work was implemented after this reviewed base. It adds bounded process and descriptor context, new syscall families, an explicit observation-policy version, and a versioned rule registry. Its regression and hosted checks do not inherit this audit decision; a new review remains required before the relevant release gates can close.
+
+The schema v3 phase, canary, sequence, import, and inert-sinkhole work was implemented after this reviewed base. Its generated values are nonsecret, its sinkhole has no routed network, and its local tests use inert fixtures. Those facts do not inherit this audit decision; hosted no-route and payload-discard evidence plus a new maintainer security review are required before any release gate can rely on the work.
+
+The split-privilege dependency-review workflows were implemented after this reviewed base. Local tests reject adversarial manifest sources, workflow permission drift, unpinned actions, artifact identity mismatch, evidence tampering, unexpected files, and unsafe Markdown. The privileged `workflow_run` path exists only on the default branch, so feature-branch checks cannot establish its hosted execution proof. This work does not inherit the audit decision and is not release authority.
+
+The inert benchmark, release-status reporter, operator runbooks, incident template, demo, and usability journey were implemented after this reviewed base. Local tests use only hand-written traces and distinguish executed fixture expectations from projection-only historical mapping. The current protected-main status snapshot reports 0 of 14 named gates satisfied. These additions improve auditability and operation; they do not inherit the audit decision, close a release gate, or authorize launch.
+
 ## Method
 
 The review combined:
@@ -61,23 +73,21 @@ The fix validates the decoded SHA 512 length, runner image content ID, lifecycle
 
 ## Open design risks
 
-### Acquisition has broad outbound network access
+### Acquisition proxy remains a trusted boundary
 
-Preparation needs npm registry access. Lifecycle scripts are disabled, but package and transitive dependency metadata can still influence what npm fetches. The preparation container can potentially reach destinations beyond the public npm registry, including addresses reachable from the Docker bridge.
-
-This remains a release blocker. Until an allowlisted acquisition proxy, equivalent egress control, or a stronger disposable virtual machine design exists, capture must run on an ephemeral host with no access to private networks, cloud metadata, trusted services, or credentials.
+Preparation needs npm registry access. Lifecycle scripts are disabled, but package and transitive dependency metadata still influence what npm requests. The post-review branch removes a direct route from npm and allows the sidecar proxy to connect only to validated public addresses for the exact npm registry authority. Registry content, proxy correctness, DNS at the proxy boundary, and the shared Docker host kernel remain trusted. Hosted adversarial checks passed on the draft branch, but this audit record remains open pending maintainer review and merge. Capture must still run on a disposable host with no trusted workloads or credentials.
 
 ### Containers share the host kernel
 
-The package process has no host mounts, no Docker socket, no network during lifecycle execution, and zero effective capabilities. It still shares a kernel with the Docker host or Docker Desktop virtual machine. A kernel or container runtime exploit is outside the protection offered by this harness.
+The package process has no host mounts, no Docker socket, no routed network during selected-phase execution, and zero effective capabilities. The optional sinkhole exposes only unrouted loopback responders. Both containers still share a kernel with the Docker host or Docker Desktop virtual machine. A kernel or container runtime exploit is outside the protection offered by this harness.
 
-### Profiles are unsigned
+### Ordinary profiles are unsigned
 
-Anyone can edit JSON provenance fields. Structural validation cannot establish authenticity. Enforcement workflows must create both profiles in a protected trusted job and must not accept contributor supplied profiles as policy evidence.
+Anyone can edit JSON provenance fields. Structural validation cannot establish authenticity. The post-review trusted-profile workflow can package one reviewed pair in a GitHub-attested bundle and verify its repository, workflow, commit, runner, image, and acquisition policy. It does not authenticate arbitrary local or contributor-supplied profiles. Enforcement workflows must create evidence from trusted source and must not accept contributor-supplied profiles as policy evidence.
 
 ### Observation is incomplete
 
-The parser covers selected system calls and one install lifecycle path. It does not capture file contents, ordinary in process environment reads, all network operations, every filesystem mutation, delayed behavior, or normal package runtime.
+The parser covers selected path and descriptor file calls, process activity, network operations, and timing calls across one selected lifecycle or import phase. It does not capture file contents, ordinary in-process environment reads, every syscall or protocol, all descriptor-sharing semantics, delayed behavior, or normal package runtime. Generated canary and observed-sequence context narrow some questions but do not close these coverage limits.
 
 ## Tool results
 

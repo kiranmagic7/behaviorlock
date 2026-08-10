@@ -22,15 +22,18 @@ const (
 )
 
 var (
-	quotedPattern   = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
-	pidPattern      = regexp.MustCompile(`^\[pid\s+[0-9]+\]\s+`)
-	plainPIDPattern = regexp.MustCompile(`^[0-9]+\s+`)
-	procPIDPattern  = regexp.MustCompile(`/proc/[0-9]+`)
-	tmpPattern      = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
-	portPattern     = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
-	ipv4Pattern     = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
-	ipv6Pattern     = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
-	familyPattern   = regexp.MustCompile(`sa_family=(AF_[A-Z0-9_]+)`)
+	quotedPattern    = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+	pidPattern       = regexp.MustCompile(`^\[pid\s+[0-9]+\]\s+`)
+	plainPIDPattern  = regexp.MustCompile(`^[0-9]+\s+`)
+	procPIDPattern   = regexp.MustCompile(`/proc/[0-9]+(?:/|$)`)
+	tmpPattern       = regexp.MustCompile(`/tmp/(?:npm-|behaviorlock-)[^/\s",)]+`)
+	nodeCachePattern = regexp.MustCompile(`/tmp/node-compile-cache/([^/\s",)]+)/([0-9a-f]{8})\.[0-9A-Za-z]{6}`)
+	npmLogPattern    = regexp.MustCompile(`^\$WORK/\.npm-cache/_logs/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}_[0-9]{2}_[0-9]{2}_[0-9]{3}Z-debug-[0-9]+\.log$`)
+	portPattern      = regexp.MustCompile(`(?:sin6?_port=htons\()([0-9]+)\)`)
+	ipv4Pattern      = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
+	ipv6Pattern      = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
+	familyPattern    = regexp.MustCompile(`sa_family=(AF_[A-Z0-9_]+)`)
+	resultSeparator  = regexp.MustCompile(`\)[ \t]+=[ \t]+`)
 )
 
 type Stats struct {
@@ -48,6 +51,7 @@ func Parse(reader io.Reader) (ParseResult, error) {
 	limited := &io.LimitedReader{R: reader, N: MaxTraceBytes + 1}
 	buffered := bufio.NewReaderSize(limited, 64<<10)
 	result := ParseResult{Behaviors: make([]model.Behavior, 0, 256)}
+	state := newParserState()
 	for {
 		line, err := buffered.ReadString('\n')
 		if len(line) > MaxLineBytes {
@@ -59,14 +63,17 @@ func Parse(reader io.Reader) (ParseResult, error) {
 				return ParseResult{}, fmt.Errorf("trace line %d contains invalid UTF-8", result.Stats.Lines)
 			}
 			trimmed := strings.TrimSpace(line)
-			if strings.Contains(trimmed, "<unfinished ...>") || strings.Contains(trimmed, "resumed>") {
-				return ParseResult{}, fmt.Errorf("trace line %d contains an unfinished syscall", result.Stats.Lines)
+			behavior, recognized, parseErr := state.consume(trimmed, model.NewEvidenceRef(result.Stats.Lines, []byte(line)))
+			if parseErr != nil {
+				return ParseResult{}, fmt.Errorf("trace line %d: %w", result.Stats.Lines, parseErr)
 			}
-			if behavior, ok := parseLine(trimmed, result.Stats.Lines); ok {
-				result.Behaviors = append(result.Behaviors, behavior)
+			if recognized {
 				result.Stats.RecognizedLines++
-				if len(result.Behaviors) > MaxBehaviors {
-					return ParseResult{}, fmt.Errorf("trace exceeds %d recognized behaviors", MaxBehaviors)
+				if behavior.Type != "" {
+					result.Behaviors = append(result.Behaviors, behavior)
+					if len(result.Behaviors) > MaxBehaviors {
+						return ParseResult{}, fmt.Errorf("trace exceeds %d recognized behaviors", MaxBehaviors)
+					}
 				}
 			} else if trimmed != "" && !strings.HasPrefix(trimmed, "+++") && !strings.HasPrefix(trimmed, "---") {
 				result.Stats.IgnoredLines++
@@ -81,6 +88,9 @@ func Parse(reader io.Reader) (ParseResult, error) {
 	}
 	if limited.N <= 0 {
 		return ParseResult{}, fmt.Errorf("trace exceeds %d bytes", MaxTraceBytes)
+	}
+	if err := state.finish(); err != nil {
+		return ParseResult{}, err
 	}
 	return result, nil
 }
@@ -126,105 +136,7 @@ func hasSentinel(behaviors []model.Behavior, target string) bool {
 	return false
 }
 
-func parseLine(line string, lineNumber int) (model.Behavior, bool) {
-	line = pidPattern.ReplaceAllString(line, "")
-	line = plainPIDPattern.ReplaceAllString(line, "")
-	open := strings.IndexByte(line, '(')
-	if open <= 0 {
-		return model.Behavior{}, false
-	}
-	call := strings.TrimSpace(line[:open])
-	resultPart := syscallResult(line)
-	outcome, errno := classifyResult(resultPart)
-	evidence := fmt.Sprintf("trace:L%d", lineNumber)
-
-	switch call {
-	case "execve", "execveat":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		arguments := quoted[1:]
-		if len(arguments) > 32 {
-			arguments = arguments[:32]
-		}
-		return model.Behavior{
-			Type: "process.exec", Operation: "exec", Target: normalizePath(quoted[0]),
-			Arguments: sanitizeValues(arguments), Outcome: outcome, Errno: errno,
-			Count: 1, Evidence: evidence, SourceCall: call,
-		}, true
-	case "connect":
-		family := firstMatch(familyPattern, line)
-		address := firstMatch(ipv4Pattern, line)
-		if address == "" {
-			address = firstMatch(ipv6Pattern, line)
-		}
-		if family == "AF_UNIX" {
-			quoted := extractQuoted(line)
-			if len(quoted) > 0 {
-				address = normalizePath(quoted[len(quoted)-1])
-			}
-		}
-		port := firstMatch(portPattern, line)
-		target := family + ":" + address
-		if port != "" {
-			target += ":" + port
-		}
-		return model.Behavior{
-			Type: "network.connect", Operation: "connect", Target: sanitize(target),
-			Outcome: outcome, Errno: errno, Count: 1, Evidence: evidence, SourceCall: call,
-		}, true
-	case "open", "openat", "openat2", "creat":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		path := normalizePath(quoted[0])
-		operation := "read"
-		behaviorType := "filesystem.read"
-		if strings.Contains(line, "O_WRONLY") || strings.Contains(line, "O_RDWR") ||
-			strings.Contains(line, "O_CREAT") || strings.Contains(line, "O_TRUNC") || strings.Contains(line, "O_APPEND") {
-			operation = "write"
-			behaviorType = "filesystem.write"
-		}
-		return fileBehavior(behaviorType, operation, path, call, outcome, errno, evidence), true
-	case "access", "faccessat", "faccessat2", "stat", "lstat", "newfstatat", "readlink", "readlinkat":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		return fileBehavior("filesystem.read", "inspect", normalizePath(quoted[0]), call, outcome, errno, evidence), true
-	case "unlink", "unlinkat", "rmdir":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		return fileBehavior("filesystem.delete", "delete", normalizePath(quoted[0]), call, outcome, errno, evidence), true
-	case "mkdir", "mkdirat", "mknod", "mknodat", "symlink", "symlinkat", "link", "linkat":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		return fileBehavior("filesystem.create", "create", normalizePath(quoted[len(quoted)-1]), call, outcome, errno, evidence), true
-	case "rename", "renameat", "renameat2":
-		quoted := extractQuoted(line)
-		if len(quoted) < 2 {
-			return model.Behavior{}, false
-		}
-		target := normalizePath(quoted[len(quoted)-2]) + " -> " + normalizePath(quoted[len(quoted)-1])
-		return fileBehavior("filesystem.rename", "rename", target, call, outcome, errno, evidence), true
-	case "chmod", "fchmodat", "chown", "lchown", "fchownat":
-		quoted := extractQuoted(line)
-		if len(quoted) == 0 {
-			return model.Behavior{}, false
-		}
-		return fileBehavior("filesystem.permission", "permission", normalizePath(quoted[0]), call, outcome, errno, evidence), true
-	default:
-		return model.Behavior{}, false
-	}
-}
-
-func fileBehavior(kind, operation, target, call, outcome, errno, evidence string) model.Behavior {
+func fileBehavior(kind, operation, target, call, outcome, errno string, evidence ...model.EvidenceRef) model.Behavior {
 	return model.Behavior{
 		Type: kind, Operation: operation, Target: target, Outcome: outcome, Errno: errno,
 		Sensitive: isSensitivePath(target), Count: 1, Evidence: evidence, SourceCall: call,
@@ -245,11 +157,20 @@ func extractQuoted(value string) []string {
 }
 
 func syscallResult(line string) string {
-	index := strings.LastIndex(line, ") = ")
-	if index < 0 {
+	_, resultStart, ok := syscallResultBoundary(line)
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(line[index+4:])
+	return strings.TrimSpace(line[resultStart:])
+}
+
+func syscallResultBoundary(line string) (int, int, bool) {
+	matches := resultSeparator.FindAllStringIndex(line, -1)
+	if len(matches) == 0 {
+		return 0, 0, false
+	}
+	match := matches[len(matches)-1]
+	return match[0], match[1], true
 }
 
 func classifyResult(value string) (string, string) {
@@ -276,7 +197,16 @@ func normalizePath(value string) string {
 	value = sanitize(value)
 	value = normalizeRoot(value, "/home/scanner", "$HOME")
 	value = normalizeRoot(value, "/work", "$WORK")
-	value = procPIDPattern.ReplaceAllString(value, "/proc/$PID")
+	value = npmLogPattern.ReplaceAllStringFunc(value, func(string) string {
+		return "$WORK/.npm-cache/_logs/$TIMESTAMP-debug-$N.log"
+	})
+	value = procPIDPattern.ReplaceAllStringFunc(value, func(match string) string {
+		if strings.HasSuffix(match, "/") {
+			return "/proc/$PID/"
+		}
+		return "/proc/$PID"
+	})
+	value = nodeCachePattern.ReplaceAllString(value, `/tmp/node-compile-cache/${1}/${2}.$$RANDOM`)
 	value = tmpPattern.ReplaceAllString(value, "$TMP")
 	value = filepath.Clean(value)
 	if strings.HasPrefix(value, "../") || value == ".." {

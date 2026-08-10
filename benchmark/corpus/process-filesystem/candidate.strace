@@ -1,0 +1,5 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
+openat(AT_FDCWD, "/work/package.json", O_RDONLY|O_CLOEXEC) = 3
+execve("/bin/sh", ["sh", "-c", "true"], 0x0) = 0
+openat(AT_FDCWD, "/etc/cron.d/behaviorlock-inert", O_WRONLY|O_CREAT|O_TRUNC, 0600) = -1 EROFS (Read-only file system)
++++ exited with 0 +++

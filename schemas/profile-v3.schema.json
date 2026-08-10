@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:behaviorlock:schema:profile:3.0.0",
+  "title": "BehaviorLock npm observation profile",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "tool", "subject", "capture", "result", "behaviors", "sequences"],
+  "properties": {
+    "schemaVersion": { "const": "3.0.0" },
+    "kind": { "const": "npm.observation.profile" },
+    "tool": { "$ref": "#/$defs/tool" },
+    "subject": { "$ref": "#/$defs/subject" },
+    "capture": { "$ref": "#/$defs/capture" },
+    "result": { "$ref": "#/$defs/result" },
+    "behaviors": {
+      "type": "array",
+      "maxItems": 250000,
+      "items": { "$ref": "#/$defs/behavior" }
+    },
+    "sequences": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/sequence" }
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "status": { "enum": ["complete", "command_failed"] }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capture": { "required": ["evidenceArtifact"] },
+          "behaviors": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "status": { "enum": ["complete", "command_failed"] }
+            }
+          },
+          "capture": {
+            "properties": {
+              "traceIntegrity": { "const": "isolated-root-tracer" }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "subject": { "required": ["registryIntegrity", "dependencyLockSha256"] },
+          "capture": { "required": ["runnerImage", "runnerImageId", "architecture", "nodeVersion", "npmVersion", "straceVersion", "acquisition"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": { "properties": { "status": { "enum": ["complete", "command_failed", "unsupported"] } } },
+          "capture": { "properties": { "phase": { "const": "import" } } }
+        }
+      },
+      "then": { "properties": { "capture": { "required": ["import"] } } }
+    }
+  ],
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "behaviorlock" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "subject": {
+      "type": "object",
+      "required": ["ecosystem", "name", "version", "purl"],
+      "properties": {
+        "ecosystem": { "const": "npm" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 214 },
+        "version": { "type": "string", "minLength": 5, "maxLength": 128 },
+        "purl": { "type": "string", "pattern": "^pkg:npm/", "maxLength": 512 },
+        "registryIntegrity": { "type": "string", "pattern": "^sha512-", "maxLength": 256 },
+        "tarballSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "dependencyLockSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["scope", "lifecycle", "completeness", "limitations"],
+      "properties": {
+        "scope": { "enum": ["registry-install-lifecycle", "registry-import-entrypoint", "external-strace"] },
+        "lifecycle": {
+          "type": "array",
+          "items": { "enum": ["preinstall", "install", "postinstall"] },
+          "uniqueItems": true
+        },
+        "completeness": { "enum": ["partial", "unverified"] },
+        "limitations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidenceArtifact": {
+      "type": "object",
+      "required": ["sha256", "byteSize", "mediaType", "format", "retention", "envelope"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "byteSize": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "mediaType": { "const": "application/vnd.behaviorlock.strace" },
+        "format": { "const": "strace-lines-v1" },
+        "retention": { "enum": ["retained", "external-unverified"] },
+        "envelope": { "enum": ["behaviorlock-trace-v1-payload", "external-strace"] }
+      },
+      "additionalProperties": false
+    },
+    "acquisition": {
+      "type": "object",
+      "required": ["networkMode", "policyVersion", "allowedAuthority", "proxyRunnerImageId"],
+      "properties": {
+        "networkMode": { "const": "registry-proxy-unix" },
+        "policyVersion": { "const": "npm-registry-connect-v1" },
+        "allowedAuthority": { "const": "registry.npmjs.org:443" },
+        "proxyRunnerImageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "canary": {
+      "type": "object",
+      "required": ["id", "kind", "location"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^canary:[a-z0-9][a-z0-9-]{0,88}$", "maxLength": 96 },
+        "kind": { "enum": ["file", "environment"] },
+        "location": { "type": "string", "minLength": 1, "maxLength": 512 }
+      },
+      "additionalProperties": false
+    },
+    "import": {
+      "type": "object",
+      "required": ["entrypoint", "moduleKind", "resolverVersion", "support"],
+      "properties": {
+        "entrypoint": { "type": "string", "maxLength": 4096 },
+        "moduleKind": { "enum": ["commonjs", "esm", "unsupported"] },
+        "resolverVersion": { "const": "node-resolve-v1" },
+        "support": { "enum": ["supported", "unsupported"] },
+        "reason": { "enum": ["entrypoint-unresolved", "unsupported-extension"] }
+      },
+      "additionalProperties": false
+    },
+    "sinkhole": {
+      "type": "object",
+      "required": ["mode", "responderVersion", "dnsRequests", "tcpConnections", "httpRequests"],
+      "properties": {
+        "mode": { "const": "loopback-no-route" },
+        "responderVersion": { "const": "inert-sinkhole-v1" },
+        "dnsRequests": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "tcpConnections": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "httpRequests": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "canaryIds": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^canary:[a-z0-9][a-z0-9-]{0,88}$" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "capture": {
+      "type": "object",
+      "required": ["networkMode", "sandboxProfile", "traceIntegrity", "observationPolicy", "attestation", "phase", "coverage", "canaries", "experimental"],
+      "properties": {
+        "runnerImage": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runnerImageId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "architecture": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "nodeVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "npmVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "straceVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "networkMode": { "enum": ["none", "sinkhole-loopback-v1", "unknown"] },
+        "sandboxProfile": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "traceIntegrity": { "enum": ["isolated-root-tracer", "external-unverified"] },
+        "observationPolicy": { "const": "strace-observation-v2" },
+        "attestation": { "const": "none" },
+        "durationMillis": { "type": "integer", "minimum": 0 },
+        "phase": { "enum": ["lifecycle", "import", "external"] },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "acquisition": { "$ref": "#/$defs/acquisition" },
+        "import": { "$ref": "#/$defs/import" },
+        "sinkhole": { "$ref": "#/$defs/sinkhole" },
+        "canaries": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/canary" }
+        },
+        "evidenceArtifact": { "$ref": "#/$defs/evidenceArtifact" },
+        "experimental": { "const": true }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "traceIntegrity": { "const": "isolated-root-tracer" } } },
+          "then": {
+            "properties": {
+              "networkMode": { "enum": ["none", "sinkhole-loopback-v1"] },
+              "sandboxProfile": { "const": "behaviorlock-linux-npm-v1" },
+              "coverage": {
+                "properties": {
+                  "completeness": { "const": "partial" }
+                }
+              },
+              "acquisition": {
+                "properties": {
+                  "proxyRunnerImageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                }
+              },
+              "evidenceArtifact": {
+                "properties": {
+                  "retention": { "const": "retained" },
+                  "envelope": { "const": "behaviorlock-trace-v1-payload" }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "networkMode": { "const": "unknown" },
+              "phase": { "const": "external" },
+              "sandboxProfile": { "const": "external-unverified" },
+              "coverage": {
+                "properties": {
+                  "scope": { "const": "external-strace" },
+                  "lifecycle": { "maxItems": 0 },
+                  "completeness": { "const": "unverified" }
+                }
+              },
+              "acquisition": false,
+              "evidenceArtifact": {
+                "properties": {
+                  "retention": { "const": "external-unverified" },
+                  "envelope": { "const": "external-strace" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "phase": { "const": "lifecycle" } } },
+          "then": {
+            "properties": {
+              "coverage": {
+                "properties": {
+                  "scope": { "const": "registry-install-lifecycle" },
+                  "lifecycle": { "minItems": 3, "maxItems": 3 },
+                  "completeness": { "const": "partial" }
+                }
+              },
+              "import": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "phase": { "const": "import" } } },
+          "then": {
+            "properties": {
+              "coverage": {
+                "properties": {
+                  "scope": { "const": "registry-import-entrypoint" },
+                  "lifecycle": { "maxItems": 0 },
+                  "completeness": { "const": "partial" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "required": ["status", "exitCode", "timedOut", "truncated"],
+      "properties": {
+        "status": { "enum": ["complete", "command_failed", "timed_out", "trace_incomplete", "resource_exhausted", "unsupported"] },
+        "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "timedOut": { "type": "boolean" },
+        "truncated": { "type": "boolean" },
+        "message": { "type": "string", "maxLength": 4096 }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } } },
+          "then": {
+            "properties": {
+              "timedOut": { "const": false },
+              "truncated": { "const": false }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "timed_out" } } },
+          "then": { "properties": { "timedOut": { "const": true } } }
+        }
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "required": ["artifactSha256", "line", "lineSha256"],
+      "properties": {
+        "artifactSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "line": { "type": "integer", "minimum": 1 },
+        "lineSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "behavior": {
+      "type": "object",
+      "required": ["type", "operation", "target", "outcome", "count", "id", "evidence", "sourceSyscall"],
+      "properties": {
+        "type": {
+          "enum": [
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.create",
+            "filesystem.delete",
+            "filesystem.rename",
+            "filesystem.permission",
+            "filesystem.truncate",
+            "filesystem.descriptor_write",
+            "filesystem.enumerate",
+            "process.exec",
+            "process.create",
+            "process.memfd",
+            "process.fileless_exec",
+            "process.ptrace",
+            "network.connect",
+            "network.socket",
+            "network.send",
+            "network.dns",
+            "network.bind",
+            "network.listen",
+            "network.accept",
+            "environment.timing"
+          ]
+        },
+        "operation": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "target": { "type": "string", "maxLength": 4099 },
+        "arguments": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "maxLength": 4099 }
+        },
+        "outcome": { "enum": ["success", "blocked", "failed", "unknown"] },
+        "errno": { "type": "string", "maxLength": 128 },
+        "sensitive": { "type": "boolean" },
+        "canaryIds": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^canary:[a-z0-9][a-z0-9-]{0,88}$" }
+        },
+        "count": { "type": "integer", "minimum": 1, "maximum": 250000 },
+        "id": { "type": "string", "pattern": "^event:sha256:[0-9a-f]{64}$" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/evidenceRef" }
+        },
+        "runtime": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/runtimeContext" }
+        },
+        "sourceSyscall": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "runtimeContext": {
+      "type": "object",
+      "required": ["process", "attribution"],
+      "properties": {
+        "process": { "type": "string", "pattern": "^(root|[1-9][0-9]*)$", "maxLength": 10 },
+        "parent": { "type": "string", "pattern": "^(root|[1-9][0-9]*)$", "maxLength": 10 },
+        "descriptor": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 7 },
+        "attribution": { "enum": ["direct", "descriptor", "unknown"] }
+      },
+      "additionalProperties": false
+    },
+    "sequence": {
+      "type": "object",
+      "required": ["id", "scope", "behaviorIds"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^sequence:sha256:[0-9a-f]{64}$" },
+        "scope": { "const": "process-lineage-observed-order" },
+        "behaviorIds": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^event:sha256:[0-9a-f]{64}$" }
+        },
+        "canaryIds": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^canary:[a-z0-9][a-z0-9-]{0,88}$" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

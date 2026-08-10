@@ -14,37 +14,53 @@ The local runner tag is resolved to one validated Docker content ID before captu
 
 Capture has two disposable container phases.
 
-The preparation phase installs an exact top level package version with lifecycle scripts disabled and records the generated dependency lock digest. It runs as uid `65532` and receives no host mounts, home directory, npm configuration, Git configuration, SSH material, cloud credentials, repository token, or Docker socket. Standard uppercase and lowercase proxy variables are explicitly empty, which prevents Docker client proxy settings from being injected. Preparation still has direct registry network access, so package and transitive dependency metadata can influence outbound fetches. It belongs on a disposable runner with no route to sensitive private services.
+The preparation phase installs an exact top level package version with lifecycle scripts disabled and records the generated dependency lock digest. It runs as uid `65532`, uses Docker network mode `none`, and receives no host mounts, home directory, npm configuration, Git configuration, SSH material, cloud credentials, repository token, or Docker socket. Npm is pinned to a loopback relay whose only destination is a private Unix socket in a randomly named Docker volume.
 
-The execution phase starts from the prepared filesystem. Networking is disabled. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` so the supervisor can perform the identity transition and trace inside the container PID namespace. The package process has zero effective capabilities. Docker's default seccomp policy remains intact.
+An unprivileged proxy sidecar owns that socket and joins a separate egress network. It accepts CONNECT only for `registry.npmjs.org:443`, rejects nonpublic DNS answers, and dials the validated address directly. The lockfile validator then rejects Git, local, linked, credentialed, alternate-port, and off-registry dependency sources. The profile records this policy and the immutable proxy image ID.
 
-`strace` writes into a root owned mode `0700` temporary filesystem that package code cannot access. It follows a selected set of file, process, and network syscalls. Package output is separated from the trace envelope. Root owned start and end sentinel reads, an empty tracer diagnostic channel, and a completion footer establish basic channel integrity. Missing evidence, tracer diagnostics, timeout, truncation, or malformed completion evidence makes the profile incomplete.
+The execution phase starts from the prepared filesystem. It runs either the default install lifecycle or the explicitly selected resolved-package import. Networking is disabled by default. If the inert sinkhole is selected, execution shares only the sinkhole container's unrouted loopback namespace. The root filesystem is read only and writable locations are bounded temporary filesystems. A root supervisor owns the trace channel while the package command runs as uid `65532`. After dropping all capabilities, the container adds only `SETUID`, `SETGID`, and `SYS_PTRACE` so the supervisor can perform the identity transition and trace inside the container PID namespace. The package process has zero effective capabilities. Docker's default seccomp policy remains intact.
+
+Each capture creates distinct, nonsecret canary values for declared disposable file and environment locations. Exact values are converted to stable identifiers only when visible on an already observed path, process argument, or bounded sinkhole request. The optional sinkhole returns fixed loopback DNS, HTTP, and TCP responses, records bounded counts and matching canary identifiers, and discards request bytes.
+
+`strace` writes timestamped per-process files into a root owned mode `0700` temporary filesystem that package code cannot access. The trusted runner prefixes each retained line with the numeric trace-file process identifier and merges the files by the tracer timestamp before assembling the envelope. The selected calls cover path and descriptor file activity, process creation and execution, anonymous memory files, process inspection, socket and endpoint activity, and timing probes. Package output is separated from the trace envelope. Root owned start and end sentinel reads, an empty tracer diagnostic channel, and a completion footer establish basic channel integrity. Missing evidence, tracer diagnostics, timeout, truncation, or malformed completion evidence makes the profile incomplete.
 
 ## Normalization
 
-The parser has byte, line, and behavior limits. It rejects invalid UTF 8 and unfinished syscalls. It normalizes only known disposable roots at exact path boundaries and selected process identifiers:
+The parser has byte, line, behavior, process, descriptor, and pending-syscall limits. It rejects invalid UTF 8, reassembles matching unfinished/resumed calls, and rejects inconsistent or incomplete continuation state. It normalizes only known disposable roots at exact path boundaries and selected process identifiers:
 
 1. `/work` becomes `$WORK`
 2. `/home/scanner` becomes `$HOME`
 3. selected npm temporary roots become `$TMP`
 4. numeric `/proc` identifiers become `$PID`
 
-Behavior records are deduplicated, counted, sorted, and assigned content derived evidence identifiers. The semantic digest excludes duration, raw trace hash, and observation counts, but retains runner identity, subject, coverage, result, and normalized behavior meaning.
+Successful open, socket, duplicate, close, and child-creation calls update bounded descriptor and lineage state separately for each process. This allows descriptor-only activity to receive a normalized path or endpoint when evidence supports the attribution. Missing attribution remains explicit as `fd:unknown`; it is never guessed.
+
+Behavior records are deduplicated, counted, sorted, and assigned content-derived semantic identifiers. They may retain up to eight capture-local runtime contexts containing process, parent, descriptor, and attribution data. Bounded sequences retain first-seen normalized behavior order for selected anchor-and-action observations within one process lineage; runtime identifiers do not enter sequence identity. A separate mode `0600` raw evidence artifact is retained. Each normalized behavior carries up to eight references containing the artifact SHA 256, raw line number, and exact raw line SHA 256. Validation checks both the complete artifact and every reference before a profile can be compared.
+
+The semantic digest excludes duration, evidence artifact metadata, line references, observation counts, and runtime process/parent/descriptor context, but retains runner identity, subject, observation policy, coverage, result, and normalized behavior meaning. Repeated captures can therefore have different evidence coordinates or runtime identifiers without changing the meaning digest.
 
 ## Comparison
 
-Two complete profiles for the same package and equivalent runner environment are compared as deterministic sets. External unverified traces require explicit caller acknowledgement. Added observations receive fixed rule identifiers and review levels. Removed observations are retained without being interpreted as safer.
+Two complete profiles for the same package, phase, and equivalent runner environment are compared as deterministic sets. Lifecycle and import profiles are never mixed. External unverified traces require explicit caller acknowledgement. Added observations receive fixed rule identifiers and review levels. Added and removed sequences are reported as ordering context. Removed observations are retained without being interpreted as safer.
 
-Profiles declare `attestation: none`. Environment fields allow honest comparability checks but are not authenticated. A future signed provenance format is a separate release gate.
+Ordinary profiles declare `attestation: none`. Environment fields and retained evidence allow consistency and comparability checks but are not authenticated. The protected trusted-profile workflow can package two reviewed profiles and their evidence into one GitHub-attested bundle. Verification binds that bundle to its repository, workflow, protected source commit, hosted runner, runner image, and acquisition policy before cross-workflow use. It does not upgrade arbitrary profiles or contributor artifacts into trusted evidence.
 
-The default decision is:
+Dependency review uses a different, lower-trust path. A `pull_request` job with a read-only token checks out only the trusted base, reads both manifests through the GitHub API, and captures exact public-registry versions itself. A separate default-branch `workflow_run` job holds comment permission, never executes the downloaded artifact, independently verifies every identity and evidence boundary, and regenerates sanitized Markdown. These artifacts remain untrusted review inputs and can never satisfy the protected trusted-profile or release proof gates.
 
-1. No added behavior: pass
-2. Added low or medium behavior: review
-3. Added high or critical behavior: fail
-4. Incomplete profile: error
+The report summary is:
 
-The CLI threshold controls its exit code. It does not rewrite the report verdict.
+1. No added behavior or sequence: `reviewRequired: false` and `highestReviewLevel: none`
+2. Any added behavior: `reviewRequired: true` with the highest deterministic behavior review level
+3. A sequence-only addition: `reviewRequired: true` and `highestReviewLevel: none`; no level is invented for ordering context
+4. Incomplete or evidence-mismatched profile: error
+
+The CLI threshold controls only its exit code. It does not rewrite the report or issue a package verdict.
+
+## Verification and usability
+
+The inert benchmark is a fifth, non-capture boundary. A strict manifest points only to regular files under `benchmark/corpus`, replays hand-written traces through the production parser and comparison engine, and checks exact behavior and rule expectations. Executed fixture results and citation-backed historical projections are different report fields so presentation cannot turn a projection into a measured detection.
+
+Release status reporting reads the same 14-gate configuration and GitHub evidence as the binary release gate. It enumerates every state but has no publication permission. Operator runbooks, the incident template, and the offline usability journey sit outside the capture trust boundary and make authorization, evidence retention, interpretation, rollback, and cleanup explicit.
 
 ## Stable extension points
 

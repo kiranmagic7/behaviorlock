@@ -8,6 +8,8 @@ import (
 
 const testRegistryIntegrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
+var testRawEvidence = []byte("execve(\"/bin/true\", [\"true\"], 0x0) = 0\n")
+
 func testProfile() Profile {
 	profile := NewProfile(Subject{
 		Ecosystem:            "npm",
@@ -23,9 +25,16 @@ func testProfile() Profile {
 	profile.Capture.NodeVersion = "v22.1.0"
 	profile.Capture.NPMVersion = "10.8.0"
 	profile.Capture.StraceVersion = "6.1"
-	profile.Capture.RawTraceSHA256 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	profile.Capture.Acquisition = &AcquisitionInfo{
+		NetworkMode: "registry-proxy-unix", PolicyVersion: "npm-registry-connect-v1",
+		AllowedAuthority: "registry.npmjs.org:443", ProxyRunnerImageID: profile.Capture.RunnerImageID,
+	}
 	profile.Result = Result{Status: "complete", ExitCode: 0}
-	profile.Behaviors = []Behavior{{Type: "process.exec", Operation: "exec", Target: "/bin/true", Outcome: "success", Count: 1, SourceCall: "execve"}}
+	profile.Behaviors = []Behavior{{
+		Type: "process.exec", Operation: "exec", Target: "/bin/true", Outcome: "success", Count: 1,
+		Evidence: []EvidenceRef{NewEvidenceRef(1, testRawEvidence)}, SourceCall: "execve",
+	}}
+	AttachEvidence(&profile, testRawEvidence, "retained", "behaviorlock-trace-v1-payload")
 	profile.Normalize()
 	return profile
 }
@@ -33,8 +42,8 @@ func testProfile() Profile {
 func TestNormalizeAggregatesAndSortsBehaviors(t *testing.T) {
 	t.Parallel()
 	profile := testProfile()
-	first := Behavior{Type: "process.exec", Operation: "exec", Target: "/bin/z", Outcome: "success", Count: 1, Evidence: "trace:L2", SourceCall: "execve"}
-	second := Behavior{Type: "filesystem.read", Operation: "read", Target: "/etc/hosts", Outcome: "success", Count: 1, Evidence: "trace:L1", SourceCall: "openat"}
+	first := Behavior{Type: "process.exec", Operation: "exec", Target: "/bin/z", Outcome: "success", Count: 1, Evidence: []EvidenceRef{NewEvidenceRef(2, []byte("exec-z"))}, SourceCall: "execve"}
+	second := Behavior{Type: "filesystem.read", Operation: "read", Target: "/etc/hosts", Outcome: "success", Count: 1, Evidence: []EvidenceRef{NewEvidenceRef(1, []byte("read-hosts"))}, SourceCall: "openat"}
 	profile.Behaviors = []Behavior{first, second, first}
 	profile.Normalize()
 	if len(profile.Behaviors) != 2 {
@@ -45,14 +54,13 @@ func TestNormalizeAggregatesAndSortsBehaviors(t *testing.T) {
 	}
 }
 
-func TestStableDigestIgnoresOnlyDuration(t *testing.T) {
+func TestStableDigestIgnoresCaptureNoiseAndEvidenceCoordinates(t *testing.T) {
 	t.Parallel()
 	left := testProfile()
 	right := testProfile()
 	left.Capture.DurationMillis = 12
 	right.Capture.DurationMillis = 999
-	left.Capture.RawTraceSHA256 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	right.Capture.RawTraceSHA256 = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	AttachEvidence(&right, []byte("different raw trace bytes\n"), "retained", "behaviorlock-trace-v1-payload")
 	left.Behaviors[0].Count = 1
 	right.Behaviors[0].Count = 99
 	leftDigest, err := left.StableDigest()
@@ -64,7 +72,7 @@ func TestStableDigestIgnoresOnlyDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if leftDigest != rightDigest {
-		t.Fatal("duration changed the stable digest")
+		t.Fatal("capture noise or evidence coordinates changed the stable digest")
 	}
 	if right.Behaviors[0].Count != 99 {
 		t.Fatal("stable digest mutated the source profile")
@@ -76,6 +84,90 @@ func TestStableDigestIgnoresOnlyDuration(t *testing.T) {
 	}
 	if changedDigest == leftDigest {
 		t.Fatal("subject change did not change the stable digest")
+	}
+}
+
+func TestStableDigestIgnoresRuntimeProcessAndDescriptorIdentifiers(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	left.Behaviors[0].Runtime = []RuntimeContext{{Process: "101", Parent: "100", Descriptor: "3", Attribution: "descriptor"}}
+	right.Behaviors[0].Runtime = []RuntimeContext{{Process: "901", Parent: "900", Descriptor: "17", Attribution: "descriptor"}}
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest != rightDigest {
+		t.Fatalf("runtime attribution changed semantic digest: %s != %s", leftDigest, rightDigest)
+	}
+}
+
+func TestStableDigestIncludesAcquisitionPolicyFingerprint(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	right.Capture.Acquisition.PolicyVersion = "npm-registry-connect-v2"
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest == rightDigest {
+		t.Fatal("acquisition policy change did not change the stable digest")
+	}
+}
+
+func TestStableDigestIgnoresSinkholeRequestCountsButIncludesCanaryMovement(t *testing.T) {
+	t.Parallel()
+	left := testProfile()
+	right := testProfile()
+	for _, profile := range []*Profile{&left, &right} {
+		profile.Capture.NetworkMode = "sinkhole-loopback-v1"
+		profile.Capture.Canaries = []CanaryDescriptor{{ID: "canary:test", Kind: "environment", Location: "env:TEST_CANARY"}}
+		profile.Capture.Sinkhole = &SinkholeInfo{Mode: "loopback-no-route", ResponderVersion: "inert-sinkhole-v1", CanaryIDs: []string{"canary:test"}}
+	}
+	left.Capture.Sinkhole.HTTPRequests = 1
+	right.Capture.Sinkhole.HTTPRequests = 99
+	leftDigest, err := left.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDigest, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftDigest != rightDigest {
+		t.Fatal("sinkhole request counts changed the stable digest")
+	}
+	if left.Capture.Sinkhole.HTTPRequests != 1 || right.Capture.Sinkhole.HTTPRequests != 99 {
+		t.Fatal("stable digest mutated retained sinkhole request counts")
+	}
+	right.Capture.Sinkhole.CanaryIDs = nil
+	changed, err := right.StableDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == leftDigest {
+		t.Fatal("sinkhole canary movement did not change the stable digest")
+	}
+}
+
+func TestUnsupportedImportProfileIsExplicitWithoutClaimingEvidence(t *testing.T) {
+	t.Parallel()
+	profile := NewProfile(Subject{Ecosystem: "npm", Name: "example", Version: "1.2.3", PURL: "pkg:npm/example@1.2.3"}, "test")
+	profile.Capture.Phase = "import"
+	profile.Capture.Coverage = CaptureCoverage{Scope: "registry-import-entrypoint", Lifecycle: []string{}, Completeness: "partial", Limitations: []string{"Import entry point was not supported."}}
+	profile.Capture.Import = &ImportInfo{ModuleKind: "unsupported", ResolverVersion: "node-resolve-v1", Support: "unsupported", Reason: "entrypoint-unresolved"}
+	profile.Result = Result{Status: "unsupported", ExitCode: 2, Message: "entry point unsupported"}
+	if err := ValidateProfile(profile); err != nil {
+		t.Fatalf("explicit unsupported import profile was rejected: %v", err)
 	}
 }
 
@@ -105,7 +197,7 @@ func TestReadWriteProfileRoundTripAndPermissions(t *testing.T) {
 func TestReadProfileRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 	filePath := filepath.Join(t.TempDir(), "profile.json")
-	if err := os.WriteFile(filePath, []byte(`{"schemaVersion":"1.0.0","kind":"npm.install.profile","unexpected":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filePath, []byte(`{"schemaVersion":"2.0.0","kind":"npm.install.profile","unexpected":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadProfile(filePath); err == nil {
@@ -140,7 +232,7 @@ func TestValidateProfileRejectsControlCharacters(t *testing.T) {
 	t.Parallel()
 	profile := testProfile()
 	profile.Behaviors[0].Target = "safe\nworkflow-command"
-	profile.Behaviors[0].Evidence = StableEvidence(profile.Behaviors[0])
+	profile.Behaviors[0].ID = StableBehaviorID(profile.Behaviors[0])
 	if err := ValidateProfile(profile); err == nil {
 		t.Fatal("control characters unexpectedly validated")
 	}
@@ -167,6 +259,11 @@ func TestValidateProfileRejectsMalformedAcquisitionEvidence(t *testing.T) {
 	if err := ValidateProfile(profile); err == nil {
 		t.Fatal("mutable runner image reference unexpectedly validated as an ID")
 	}
+	profile = testProfile()
+	profile.Capture.Acquisition = nil
+	if err := ValidateProfile(profile); err == nil {
+		t.Fatal("captured profile without an acquisition egress fingerprint unexpectedly validated")
+	}
 }
 
 func TestValidateProfileRejectsUnsafeCoverage(t *testing.T) {
@@ -183,12 +280,34 @@ func TestValidateProfileRejectsUnsafeCoverage(t *testing.T) {
 	}
 }
 
-func TestSeverityRanksAreOrdered(t *testing.T) {
+func TestReviewLevelRanksAreOrdered(t *testing.T) {
 	t.Parallel()
 	levels := []string{"none", "low", "medium", "high", "critical"}
 	for index := 1; index < len(levels); index++ {
-		if SeverityRank(levels[index]) <= SeverityRank(levels[index-1]) {
-			t.Fatalf("severity order is invalid at %q", levels[index])
+		if ReviewLevelRank(levels[index]) <= ReviewLevelRank(levels[index-1]) {
+			t.Fatalf("review level order is invalid at %q", levels[index])
 		}
+	}
+}
+
+func TestVerifyEvidenceRejectsTampering(t *testing.T) {
+	t.Parallel()
+	profile := testProfile()
+	if err := VerifyEvidence(profile, testRawEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyEvidence(profile, []byte("execve(\"/bin/false\", [\"false\"], 0x0) = 0\n")); err == nil {
+		t.Fatal("tampered raw evidence unexpectedly verified")
+	}
+}
+
+func TestReadProfileRejectsHistoricalSchema(t *testing.T) {
+	t.Parallel()
+	filePath := filepath.Join(t.TempDir(), "profile-v1.json")
+	if err := os.WriteFile(filePath, []byte(`{"schemaVersion":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadProfile(filePath); err == nil {
+		t.Fatal("historical profile unexpectedly read as current")
 	}
 }

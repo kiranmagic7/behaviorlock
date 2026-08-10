@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:behaviorlock:schema:usability-observation:1",
+  "title": "BehaviorLock local usability observation",
+  "type": "object",
+  "required": ["schemaVersion", "sessionId", "sourceSha", "platform", "setupSuccess", "captureStatus", "evidenceVerification", "deterministicReplay", "reportComprehension", "falsePositiveReports", "cleanupStatus", "notes"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "sessionId": { "type": "string", "pattern": "^[a-zA-Z0-9._-]{1,128}$" },
+    "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "platform": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "setupSuccess": { "type": "boolean" },
+    "captureStatus": { "enum": ["complete", "command-failed", "timed-out", "trace-incomplete", "resource-exhausted", "unsupported", "not-run-in-example"] },
+    "evidenceVerification": { "enum": ["matched", "mismatched", "not-run"] },
+    "deterministicReplay": { "enum": ["matched", "mismatched", "not-run"] },
+    "reportComprehension": {
+      "type": "object",
+      "required": ["phaseIdentified", "addedObservationsIdentified", "reviewLevelIdentified", "limitationsIdentified", "understoodNoPackageVerdict"],
+      "properties": {
+        "phaseIdentified": { "type": "boolean" },
+        "addedObservationsIdentified": { "type": "boolean" },
+        "reviewLevelIdentified": { "type": "boolean" },
+        "limitationsIdentified": { "type": "boolean" },
+        "understoodNoPackageVerdict": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "falsePositiveReports": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+    "cleanupStatus": { "enum": ["complete", "incomplete", "not-run"] },
+    "notes": { "type": "string", "maxLength": 2048 }
+  },
+  "additionalProperties": false
+}

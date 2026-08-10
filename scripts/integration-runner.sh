@@ -2,21 +2,75 @@
 set -eu
 
 temp_dir="$(mktemp -d)"
-trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
+probe_proxy=""
+probe_network=""
+probe_volume=""
+tracer_death_container=""
+resource_container=""
+sinkhole_container=""
+sinkhole_resolver_volume=""
+cleanup_integration() {
+  if [ -n "$probe_proxy" ]; then
+    docker rm --force "$probe_proxy" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$probe_volume" ]; then
+    docker volume rm --force "$probe_volume" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$probe_network" ]; then
+    docker network rm "$probe_network" >/dev/null 2>&1 || true
+  fi
+  for test_container in "$tracer_death_container" "$resource_container" "$sinkhole_container"; do
+    if [ -n "$test_container" ]; then
+      docker rm --force "$test_container" >/dev/null 2>&1 || true
+    fi
+  done
+  if [ -n "$sinkhole_resolver_volume" ]; then
+    docker volume rm --force "$sinkhole_resolver_volume" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$temp_dir"
+}
+trap cleanup_integration EXIT
+trap 'exit 130' HUP INT TERM
 trace_output="$temp_dir/envelope.txt"
 raw_trace="$temp_dir/raw.strace"
 profile="$temp_dir/profile.json"
+profile_evidence="$profile.evidence.strace"
 
 run_trace_container() {
   runner_image="$1"
-  docker run --rm \
-    --network none \
+  container_name="${2:-}"
+  network_mode="${3:-none}"
+  package_spec="${4:-behaviorlock-fixture@1.0.0}"
+  capture_phase="${5:-lifecycle}"
+  capability_mode="${6:-with-ptrace}"
+  sinkhole_enabled=0
+  case "$network_mode" in
+    container:behaviorlock-sinkhole-*) sinkhole_enabled=1 ;;
+  esac
+  if [ -n "$container_name" ]; then
+    set -- --name "$container_name"
+  else
+    set -- --rm
+  fi
+  if [ "$sinkhole_enabled" -eq 1 ]; then
+    if [ -z "$sinkhole_resolver_volume" ]; then
+      echo "sinkhole trace is missing its resolver volume" >&2
+      return 1
+    fi
+    set -- "$@" --mount "type=volume,source=$sinkhole_resolver_volume,target=/etc/resolv.conf,readonly,volume-nocopy,volume-subpath=resolv.conf"
+  fi
+  case "$capability_mode" in
+    with-ptrace) set -- "$@" --cap-add SYS_PTRACE ;;
+    without-ptrace) ;;
+    *) echo "unknown trace capability mode: $capability_mode" >&2; return 64 ;;
+  esac
+  docker run "$@" \
+    --network "$network_mode" \
     --read-only \
     --user 0:0 \
     --cap-drop ALL \
     --cap-add SETUID \
     --cap-add SETGID \
-    --cap-add SYS_PTRACE \
     --security-opt no-new-privileges:true \
     --pids-limit 128 \
     --memory 512m \
@@ -24,6 +78,7 @@ run_trace_container() {
     --cpus 1 \
     --ulimit nofile=1024:1024 \
     --ulimit nproc=128:128 \
+    --ulimit fsize=67108864:67108864 \
     --ulimit core=0:0 \
     --shm-size 16m \
     --ipc none \
@@ -37,6 +92,15 @@ run_trace_container() {
     --env npm_config_audit=false \
     --env npm_config_fund=false \
     --env npm_config_update_notifier=false \
+    --env "BEHAVIORLOCK_SINKHOLE_ENABLED=$sinkhole_enabled" \
+    --env BEHAVIORLOCK_CANARY_SSH=behaviorlock-canary.invalid/integration-ssh/0000000000000001 \
+    --env BEHAVIORLOCK_CANARY_AWS_FILE=behaviorlock-canary.invalid/integration-aws-file/0000000000000002 \
+    --env BEHAVIORLOCK_CANARY_DOCKER=behaviorlock-canary.invalid/integration-docker/0000000000000003 \
+    --env BEHAVIORLOCK_CANARY_NPM_FILE=behaviorlock-canary.invalid/integration-npm-file/0000000000000004 \
+    --env AWS_ACCESS_KEY_ID=behaviorlock-canary.invalid/integration-aws-id/0000000000000005 \
+    --env AWS_SECRET_ACCESS_KEY=behaviorlock-canary.invalid/integration-aws-secret/0000000000000006 \
+    --env NPM_TOKEN=behaviorlock-canary.invalid/integration-npm-token/0000000000000007 \
+    --env GITHUB_TOKEN=behaviorlock-canary.invalid/integration-github-token/0000000000000008 \
     --env HTTP_PROXY= \
     --env HTTPS_PROXY= \
     --env ALL_PROXY= \
@@ -45,7 +109,130 @@ run_trace_container() {
     --env https_proxy= \
     --env all_proxy= \
     --env no_proxy= \
-    "$runner_image" trace behaviorlock-fixture@1.0.0
+    "$runner_image" trace "$package_spec" "$capture_phase"
+}
+
+run_resource_trace_container() {
+  fixture_mode="$1"
+  container_name="$2"
+  pids_limit=128
+  nproc_limit=128
+  memory_limit=256m
+  nofile_limit=1024
+  file_limit=67108864
+  work_size=64m
+  temporary_size=32m
+  trace_size=64m
+  case "$fixture_mode" in
+    # The fixture applies a lower RLIMIT_NPROC after the package uid transition.
+    # Keep container-wide headroom for the root-owned tracer and supervisor.
+    process) pids_limit=128; nproc_limit=128; memory_limit=512m ;;
+    descriptor) nofile_limit=64 ;;
+    tmpfs) work_size=4m ;;
+    # The fixture applies its smaller RLIMIT_FSIZE after uid transition so the
+    # trusted tracer can retain the evidence needed to prove the boundary.
+    file) ;;
+    output) temporary_size=4m ;;
+    syscall) trace_size=4m ;;
+    timeout) ;;
+    *) echo "unknown resource trace mode: $fixture_mode" >&2; return 64 ;;
+  esac
+  timeout --signal=TERM --kill-after=3 30 \
+    docker run \
+    --name "$container_name" \
+    --network none \
+    --read-only \
+    --user 0:0 \
+    --cap-drop ALL \
+    --cap-add SETUID \
+    --cap-add SETGID \
+    --cap-add SYS_PTRACE \
+    --security-opt no-new-privileges:true \
+    --pids-limit "$pids_limit" \
+    --memory "$memory_limit" \
+    --memory-swap "$memory_limit" \
+    --cpus 1 \
+    --ulimit "nofile=$nofile_limit:$nofile_limit" \
+    --ulimit "nproc=$nproc_limit:$nproc_limit" \
+    --ulimit "fsize=$file_limit:$file_limit" \
+    --ulimit core=0:0 \
+    --shm-size 8m \
+    --ipc none \
+    --tmpfs "/work:rw,exec,nosuid,nodev,size=$work_size,uid=65532,gid=65532,mode=0700" \
+    --tmpfs "/tmp:rw,exec,nosuid,nodev,size=$temporary_size,uid=0,gid=0,mode=1777" \
+    --tmpfs /home/scanner:rw,nosuid,nodev,size=4m,uid=65532,gid=65532,mode=0700 \
+    --tmpfs "/trace:rw,nosuid,nodev,noexec,size=$trace_size,uid=0,gid=0,mode=0700" \
+    --env HOME=/home/scanner \
+    --env npm_config_cache=/work/.npm-cache \
+    --env npm_config_userconfig=/dev/null \
+    --env npm_config_audit=false \
+    --env npm_config_fund=false \
+    --env npm_config_update_notifier=false \
+    --env "BEHAVIORLOCK_RESOURCE_MODE=$fixture_mode" \
+    --env BEHAVIORLOCK_CANARY_SSH=behaviorlock-canary.invalid/integration-ssh/0000000000000001 \
+    --env BEHAVIORLOCK_CANARY_AWS_FILE=behaviorlock-canary.invalid/integration-aws-file/0000000000000002 \
+    --env BEHAVIORLOCK_CANARY_DOCKER=behaviorlock-canary.invalid/integration-docker/0000000000000003 \
+    --env BEHAVIORLOCK_CANARY_NPM_FILE=behaviorlock-canary.invalid/integration-npm-file/0000000000000004 \
+    --env AWS_ACCESS_KEY_ID=behaviorlock-canary.invalid/integration-aws-id/0000000000000005 \
+    --env AWS_SECRET_ACCESS_KEY=behaviorlock-canary.invalid/integration-aws-secret/0000000000000006 \
+    --env NPM_TOKEN=behaviorlock-canary.invalid/integration-npm-token/0000000000000007 \
+    --env GITHUB_TOKEN=behaviorlock-canary.invalid/integration-github-token/0000000000000008 \
+    --env HTTP_PROXY= \
+    --env HTTPS_PROXY= \
+    --env ALL_PROXY= \
+    --env NO_PROXY= \
+    --env http_proxy= \
+    --env https_proxy= \
+    --env all_proxy= \
+    --env no_proxy= \
+    behaviorlock-resource-fixture:dev trace behaviorlock-resource-fixture@1.0.0 lifecycle
+}
+
+remove_resource_container() {
+  container_name="$1"
+  docker rm --force "$container_name" >/dev/null 2>&1 || true
+  if [ "$resource_container" = "$container_name" ]; then
+    resource_container=""
+  fi
+}
+
+require_resource_match() {
+  pattern="$1"
+  description="$2"
+  output_file="$3"
+  error_file="$4"
+  if grep -Eq -- "$pattern" "$output_file"; then
+    return
+  fi
+  echo "resource fixture check failed: $description" >&2
+  echo "resource fixture stdout (tail):" >&2
+  tail -120 "$output_file" >&2 || true
+  echo "resource fixture stderr (tail):" >&2
+  tail -120 "$error_file" >&2 || true
+  exit 1
+}
+
+assert_no_capture_resources() {
+  if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy|sinkhole)-'; then
+    echo "capture left an analysis container behind" >&2
+    exit 1
+  fi
+  if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^behaviorlock-analysis:'; then
+    echo "capture left a temporary image behind" >&2
+    exit 1
+  fi
+  if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-socket-'; then
+    echo "capture left an acquisition socket volume behind" >&2
+    exit 1
+  fi
+  if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-sinkhole-resolver-'; then
+    echo "capture left a sinkhole resolver volume behind" >&2
+    exit 1
+  fi
+  if docker network ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-egress-'; then
+    echo "capture left an acquisition egress network behind" >&2
+    exit 1
+  fi
 }
 
 require_trace_match() {
@@ -59,15 +246,84 @@ require_trace_match() {
   exit 1
 }
 
+require_trace_count() {
+  pattern="$1"
+  expected="$2"
+  description="$3"
+  observed="$(grep -Ec -- "$pattern" "$trace_output" || true)"
+  if [ "$observed" -eq "$expected" ]; then
+    return
+  fi
+  echo "fixture trace count failed: $description; got $observed, want $expected" >&2
+  sed -n '1,240p' "$trace_output" >&2
+  exit 1
+}
+
+reject_trace_text() {
+  forbidden_text="$1"
+  description="$2"
+  if ! grep -Fq -- "$forbidden_text" "$trace_output"; then
+    return
+  fi
+  echo "fixture trace isolation failed: $description" >&2
+  sed -n '1,240p' "$trace_output" >&2
+  exit 1
+}
+
+require_profile_type() {
+  behavior_type="$1"
+  syscall_pattern="${2:-}"
+  if jq -e --arg behavior_type "$behavior_type" '.behaviors | any(.type == $behavior_type)' "$profile" >/dev/null; then
+    return
+  fi
+  echo "fixture profile check failed: missing $behavior_type" >&2
+  jq -r '.behaviors[].type' "$profile" | sort -u >&2
+  if [ -n "$syscall_pattern" ]; then
+    echo "matching raw syscall lines:" >&2
+    grep -E -- "$syscall_pattern" "$profile_evidence" | sed -n '1,20p' >&2 || true
+  fi
+  exit 1
+}
+
+require_profile_observation() {
+  target="$1"
+  outcome="$2"
+  errno="$3"
+  description="$4"
+  if jq -e \
+    --arg target "$target" \
+    --arg outcome "$outcome" \
+    --arg errno "$errno" \
+    'any(.behaviors[]; .target == $target and .outcome == $outcome and ($errno == "" or .errno == $errno))' \
+    "$profile" >/dev/null; then
+    return
+  fi
+  echo "fixture profile check failed: $description" >&2
+  jq '.behaviors' "$profile" >&2
+  exit 1
+}
+
 docker build --pull=false --tag behaviorlock-runner-fixture:dev testdata/npm-fixture
 run_trace_container behaviorlock-runner-fixture:dev > "$trace_output"
 
-require_trace_match '^BEHAVIORLOCK_TRACE_V1$' 'missing trace header'
+require_trace_count '^BEHAVIORLOCK_TRACE_V1$' 1 'trusted trace header was missing or duplicated'
+require_trace_count '^BEHAVIORLOCK_TRACE_END exit=' 1 'trusted trace footer was missing or duplicated'
 require_trace_match '^BEHAVIORLOCK_TRACE_END exit=0$' 'lifecycle or tracer returned nonzero'
 require_trace_match '/proc/self/status' 'fixture did not inspect its effective capabilities'
 require_trace_match '/trace.*(EACCES|EPERM)' 'package code was not denied access to the trace directory'
-if grep -q 'BEHAVIORLOCK_CANARY_DO_NOT_USE' "$trace_output"; then
+require_trace_match 'connect\(.*198\.51\.100\.1.* = -1 (EACCES|EPERM|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED)' 'TCP probe was not blocked in the raw trace'
+require_trace_match '(sendto|sendmsg|sendmmsg)\(.*198\.51\.100\.53.* = -1 (EACCES|EPERM|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED)' 'DNS probe was not blocked in the raw trace'
+if grep -q 'behaviorlock-canary.invalid/' "$trace_output"; then
   echo "trace disclosed canary secret contents" >&2
+  exit 1
+fi
+reject_trace_text '/tmp/behaviorlock-forged-syscall-marker' 'package output forged a syscall line'
+reject_trace_text 'BEHAVIORLOCK_TRACE_END exit=99' 'package output forged a trace footer'
+reject_trace_text 'BEHAVIORLOCK_FIXTURE_ANSI_PAYLOAD' 'package output entered the trace channel'
+reject_trace_text 'BEHAVIORLOCK_FIXTURE_WORKFLOW_COMMAND' 'a workflow command entered the trace channel'
+escape_character="$(printf '\033')"
+if grep -Fq -- "$escape_character" "$trace_output"; then
+  echo "fixture trace contained a raw terminal escape character" >&2
   exit 1
 fi
 
@@ -83,12 +339,206 @@ go run ./cmd/behaviorlock profile \
   --output "$profile"
 go run ./cmd/behaviorlock validate --profile "$profile"
 
-grep -q '"type": "network.connect"' "$profile"
+test -s "$profile_evidence"
+if [ "$(stat -c '%a' "$profile_evidence")" != "600" ]; then
+  echo "raw evidence companion permissions are not 0600" >&2
+  exit 1
+fi
+tampered_evidence="$temp_dir/tampered.strace"
+cp "$profile_evidence" "$tampered_evidence"
+printf 'tampered\n' >> "$tampered_evidence"
+if go run ./cmd/behaviorlock validate --profile "$profile" --evidence "$tampered_evidence" >/dev/null 2>&1; then
+  echo "validate accepted tampered raw evidence" >&2
+  exit 1
+fi
+
+require_profile_type 'network.connect'
+require_profile_observation '/etc/behaviorlock-should-not-exist' 'blocked' 'EROFS' 'read only image root did not block a package write'
+# $WORK is the literal normalized path token in the JSON profile.
+# shellcheck disable=SC2016
+require_profile_observation '$WORK/behaviorlock-fixture-output' 'success' '' 'writable work tmpfs did not retain the fixture output'
 # $HOME is the literal normalized path token in the JSON profile.
 # shellcheck disable=SC2016
 grep -q '"target": "$HOME/.ssh/id_rsa"' "$profile"
 grep -q '"sensitive": true' "$profile"
 grep -q '"target": "/bin/sh"' "$profile"
+require_profile_type 'network.dns'
+require_profile_type 'network.listen' 'listen\('
+require_profile_type 'network.accept'
+require_profile_type 'filesystem.descriptor_write'
+require_profile_type 'filesystem.enumerate'
+require_profile_type 'process.create'
+require_profile_type 'process.ptrace'
+require_profile_type 'environment.timing'
+grep -q '"runtime": \[' "$profile"
+
+ptrace_failure_output="$temp_dir/no-ptrace.out"
+ptrace_failure_error="$temp_dir/no-ptrace.err"
+if run_trace_container behaviorlock-runner-fixture:dev "" none behaviorlock-fixture@1.0.0 lifecycle without-ptrace > "$ptrace_failure_output" 2> "$ptrace_failure_error"; then
+  echo "runner traced package code after SYS_PTRACE was removed" >&2
+  exit 1
+fi
+grep -q 'strace reported diagnostics; capture is incomplete' "$ptrace_failure_error"
+if grep -Eq '^BEHAVIORLOCK_TRACE_(V1|END )' "$ptrace_failure_output"; then
+  echo "unsupported tracing emitted a trusted trace envelope" >&2
+  exit 1
+fi
+
+baseline_profile="$temp_dir/baseline.profile.json"
+candidate_profile="$temp_dir/candidate.profile.json"
+diff_report="$temp_dir/diff.json"
+go run ./cmd/behaviorlock profile \
+  --package example@1.0.0 \
+  --trace testdata/traces/baseline.strace \
+  --output "$baseline_profile"
+go run ./cmd/behaviorlock profile \
+  --package example@1.1.0 \
+  --trace testdata/traces/candidate.strace \
+  --output "$candidate_profile"
+go run ./cmd/behaviorlock compare \
+  --allow-external \
+  --baseline "$baseline_profile" \
+  --candidate "$candidate_profile" \
+  --format json \
+  --fail-on none \
+  --output "$diff_report"
+grep -q '"reviewRequired": true' "$diff_report"
+grep -q '"highestReviewLevel": "critical"' "$diff_report"
+grep -q '"artifactSha256": "sha256:' "$diff_report"
+grep -q '"lineSha256": "sha256:' "$diff_report"
+
+direct_probe='
+const net = require("node:net");
+const targets = [
+  ["registry.npmjs.org", 443],
+  ["1.1.1.1", 443],
+  ["10.0.0.1", 443],
+  ["169.254.169.254", 80],
+  ["172.17.0.1", 80],
+];
+async function isBlocked([host, port]) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const finish = (blocked) => {
+      socket.destroy();
+      resolve(blocked);
+    };
+    socket.once("connect", () => finish(false));
+    socket.once("error", () => finish(true));
+    socket.setTimeout(750, () => finish(true));
+  });
+}
+(async () => {
+  for (const target of targets) {
+    if (!(await isBlocked(target))) process.exit(1);
+  }
+})().catch(() => process.exit(1));
+'
+if ! docker run --rm \
+  --network none \
+  --user 65532:65532 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --entrypoint node \
+  behaviorlock-runner:dev \
+  -e "$direct_probe"; then
+  echo "network-none preparation probe reached a direct destination" >&2
+  exit 1
+fi
+
+network_suffix="$(basename "$temp_dir" | tr -cd 'a-zA-Z0-9')"
+probe_proxy="behaviorlock-proxy-probe-$network_suffix"
+probe_network="behaviorlock-acq-egress-probe-$network_suffix"
+probe_volume="behaviorlock-acq-socket-probe-$network_suffix"
+docker network create --driver bridge "$probe_network" >/dev/null
+docker volume create --driver local "$probe_volume" >/dev/null
+docker run --detach \
+  --name "$probe_proxy" \
+  --network "$probe_network" \
+  --read-only \
+  --user 0:0 \
+  --cap-drop ALL \
+  --cap-add CHOWN \
+  --cap-add SETUID \
+  --cap-add SETGID \
+  --security-opt no-new-privileges:true \
+  --pids-limit 64 \
+  --memory 128m \
+  --memory-swap 128m \
+  --cpus 0.5 \
+  --ulimit nofile=256:256 \
+  --ulimit nproc=64:64 \
+  --ulimit core=0:0 \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700 \
+  --mount "type=volume,source=$probe_volume,target=/proxy,volume-nocopy" \
+  --env HTTP_PROXY= \
+  --env HTTPS_PROXY= \
+  --env ALL_PROXY= \
+  --env NO_PROXY= \
+  --env http_proxy= \
+  --env https_proxy= \
+  --env all_proxy= \
+  --env no_proxy= \
+  behaviorlock-runner:dev proxy >/dev/null
+proxy_ready=false
+proxy_attempt=0
+while [ "$proxy_attempt" -lt 100 ]; do
+  if docker logs "$probe_proxy" 2>/dev/null | grep -q '^BEHAVIORLOCK_PROXY_READY_V1 npm-registry-connect-v1 registry.npmjs.org:443$'; then
+    proxy_ready=true
+    break
+  fi
+  proxy_attempt=$((proxy_attempt + 1))
+  sleep 0.05
+done
+if [ "$proxy_ready" != true ]; then
+  echo "manual acquisition proxy did not become ready" >&2
+  docker logs "$probe_proxy" >&2 || true
+  exit 1
+fi
+if [ "$(docker exec "$probe_proxy" awk '/^Uid:/ { print $2 }' /proc/1/status)" != "65532" ]; then
+  echo "acquisition proxy PID 1 did not drop to uid 65532" >&2
+  exit 1
+fi
+if [ "$(docker exec "$probe_proxy" awk '/^CapEff:/ { print $2 }' /proc/1/status)" != "0000000000000000" ]; then
+  echo "acquisition proxy retained effective capabilities" >&2
+  exit 1
+fi
+
+proxy_client='
+const net = require("node:net");
+const authority = process.argv[1];
+const expected = process.argv[2];
+let response = "";
+const socket = net.connect("/proxy/proxy.sock", () => {
+  socket.write("CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\n\r\n");
+});
+socket.on("data", (chunk) => {
+  response += chunk.toString("utf8");
+  if (response.includes("\r\n\r\n")) socket.end();
+});
+socket.on("error", () => process.exit(1));
+socket.setTimeout(10000, () => process.exit(1));
+socket.on("close", () => process.exit(response.startsWith("HTTP/1.1 " + expected) ? 0 : 1));
+'
+for probe_case in 'attacker.invalid:443 403' 'registry.npmjs.org:443 200'; do
+  # The values are fixed test cases, not untrusted input.
+  # shellcheck disable=SC2086
+  docker run --rm \
+    --network none \
+    --user 65532:65532 \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --mount "type=volume,source=$probe_volume,target=/proxy,readonly,volume-nocopy" \
+    --entrypoint node \
+    behaviorlock-runner:dev \
+    -e "$proxy_client" $probe_case
+done
+docker rm --force "$probe_proxy" >/dev/null
+probe_proxy=""
+docker volume rm --force "$probe_volume" >/dev/null
+probe_volume=""
+docker network rm "$probe_network" >/dev/null
+probe_network=""
 
 capture_profile="$temp_dir/capture.profile.json"
 go build -trimpath -o "$temp_dir/behaviorlock" ./cmd/behaviorlock
@@ -98,17 +548,126 @@ go build -trimpath -o "$temp_dir/behaviorlock" ./cmd/behaviorlock
   --timeout 3m \
   --output "$capture_profile"
 "$temp_dir/behaviorlock" validate --profile "$capture_profile"
+test -s "$capture_profile.evidence.strace"
 grep -q '"traceIntegrity": "isolated-root-tracer"' "$capture_profile"
 grep -q '"dependencyLockSha256": "sha256:' "$capture_profile"
+grep -q '"networkMode": "registry-proxy-unix"' "$capture_profile"
+grep -q '"policyVersion": "npm-registry-connect-v1"' "$capture_profile"
+grep -q '"allowedAuthority": "registry.npmjs.org:443"' "$capture_profile"
 
-if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace)-'; then
-  echo "capture left an analysis container behind" >&2
+assert_no_capture_resources
+
+sinkhole_profile="$temp_dir/sinkhole.profile.json"
+"$temp_dir/behaviorlock" capture \
+  --experimental \
+  --phase import \
+  --sinkhole \
+  --package is-number@7.0.0 \
+  --timeout 3m \
+  --output "$sinkhole_profile"
+"$temp_dir/behaviorlock" validate --profile "$sinkhole_profile"
+jq -e '.capture.phase == "import" and .capture.networkMode == "sinkhole-loopback-v1" and .capture.import.moduleKind == "commonjs" and .capture.import.support == "supported" and .capture.sinkhole.mode == "loopback-no-route" and .capture.sinkhole.responderVersion == "inert-sinkhole-v1"' "$sinkhole_profile" >/dev/null
+if grep -q 'behaviorlock-canary.invalid/' "$sinkhole_profile"; then
+  echo "profile disclosed generated canary values" >&2
   exit 1
 fi
-if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^behaviorlock-analysis:'; then
-  echo "capture left a temporary image behind" >&2
+assert_no_capture_resources
+
+docker build --pull=false --tag behaviorlock-sinkhole-fixture:dev testdata/sinkhole-fixture
+offline_sinkhole_output="$temp_dir/sinkhole-offline.out"
+run_trace_container behaviorlock-sinkhole-fixture:dev "" none behaviorlock-sinkhole-fixture@1.0.0 import > "$offline_sinkhole_output"
+grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$offline_sinkhole_output"
+if grep -q '/work/behaviorlock-sinkhole-stage' "$offline_sinkhole_output"; then
+  echo "synthetic second stage progressed during the offline default" >&2
   exit 1
 fi
+
+sinkhole_container="behaviorlock-sinkhole-fixture-$network_suffix"
+sinkhole_resolver_volume="behaviorlock-sinkhole-resolver-fixture-$network_suffix"
+docker volume create "$sinkhole_resolver_volume" >/dev/null
+docker run --rm \
+  --network none \
+  --read-only \
+  --user 0:0 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 16 \
+  --memory 32m \
+  --memory-swap 32m \
+  --cpus 0.25 \
+  --mount "type=volume,source=$sinkhole_resolver_volume,target=/resolver,volume-nocopy" \
+  behaviorlock-runner:dev resolver
+docker run --detach \
+  --name "$sinkhole_container" \
+  --network none \
+  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+  --read-only \
+  --user 65532:65532 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 64 \
+  --memory 128m \
+  --memory-swap 128m \
+  --cpus 0.5 \
+  --ulimit nofile=256:256 \
+  --ulimit nproc=64:64 \
+  --ulimit core=0:0 \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m,uid=65532,gid=65532,mode=0700 \
+  --env BEHAVIORLOCK_SINKHOLE_CANARIES=W3siaWQiOiJjYW5hcnk6Z2l0aHViLXRva2VuIiwidmFsdWUiOiJiZWhhdmlvcmxvY2stY2FuYXJ5LmludmFsaWQvaW50ZWdyYXRpb24tZ2l0aHViLXRva2VuLzAwMDAwMDAwMDAwMDAwMDgifV0 \
+  behaviorlock-runner:dev sinkhole >/dev/null
+sinkhole_ready=false
+sinkhole_attempt=0
+while [ "$sinkhole_attempt" -lt 100 ]; do
+  if docker logs "$sinkhole_container" 2>/dev/null | grep -q '^BEHAVIORLOCK_SINKHOLE_READY_V1 inert-sinkhole-v1$'; then
+    sinkhole_ready=true
+    break
+  fi
+  sinkhole_attempt=$((sinkhole_attempt + 1))
+  sleep 0.05
+done
+if [ "$sinkhole_ready" != true ]; then
+  echo "inert sinkhole did not become ready" >&2
+  docker logs "$sinkhole_container" >&2 || true
+  exit 1
+fi
+if [ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$sinkhole_container")" != none ]; then
+  echo "inert sinkhole received a routed network" >&2
+  exit 1
+fi
+if [ "$(docker exec "$sinkhole_container" awk '/^Uid:/ { print $2 }' /proc/1/status)" != "65532" ]; then
+  echo "inert sinkhole PID 1 did not drop to uid 65532" >&2
+  exit 1
+fi
+if [ "$(docker exec "$sinkhole_container" awk '/^CapEff:/ { print $2 }' /proc/1/status)" != "0000000000000000" ]; then
+  echo "inert sinkhole retained an effective capability" >&2
+  exit 1
+fi
+
+sinkhole_network_probe='const net=require("node:net"); async function test(host,port,want){return new Promise((resolve)=>{const s=net.connect({host,port}); const done=(value)=>{s.destroy();resolve(value===want)}; s.once("connect",()=>done(true)); s.once("error",()=>done(false)); s.setTimeout(500,()=>done(false));});} (async()=>{if(!(await test("127.0.0.1",80,true)))process.exit(1); for(const target of [["1.1.1.1",443],["10.0.0.1",443],["169.254.169.254",80],["172.17.0.1",80]])if(!(await test(target[0],target[1],false)))process.exit(1);})().catch(()=>process.exit(1));'
+docker run --rm \
+  --network "container:$sinkhole_container" \
+  --user 65532:65532 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --entrypoint node \
+  behaviorlock-runner:dev -e "$sinkhole_network_probe"
+
+sinkhole_stage_output="$temp_dir/sinkhole-stage.out"
+run_trace_container behaviorlock-sinkhole-fixture:dev "" "container:$sinkhole_container" behaviorlock-sinkhole-fixture@1.0.0 import > "$sinkhole_stage_output"
+grep -q '^BEHAVIORLOCK_TRACE_END exit=0$' "$sinkhole_stage_output"
+grep -q '/work/behaviorlock-sinkhole-stage' "$sinkhole_stage_output"
+sinkhole_logs="$temp_dir/sinkhole.log"
+docker logs "$sinkhole_container" > "$sinkhole_logs"
+grep -q 'BEHAVIORLOCK_SINKHOLE_V1 {"kind":"dns","canaryIds":\[\]}' "$sinkhole_logs"
+grep -q 'BEHAVIORLOCK_SINKHOLE_V1 {"kind":"http","canaryIds":\["canary:github-token"\]}' "$sinkhole_logs"
+if grep -q 'behaviorlock-canary.invalid/' "$sinkhole_logs"; then
+  echo "sinkhole audit retained a canary value or request payload" >&2
+  exit 1
+fi
+docker rm --force "$sinkhole_container" >/dev/null
+sinkhole_container=""
+docker volume rm --force "$sinkhole_resolver_volume" >/dev/null
+sinkhole_resolver_volume=""
 
 docker build --pull=false --tag behaviorlock-tracer-failure:dev testdata/tracer-failure
 failure_output="$temp_dir/tracer-failure.out"
@@ -122,3 +681,210 @@ if grep -q '^BEHAVIORLOCK_TRACE_END ' "$failure_output"; then
   echo "failed tracer emitted a trusted completion footer" >&2
   exit 1
 fi
+
+docker build --pull=false --tag behaviorlock-tracer-death:dev testdata/tracer-death
+tracer_death_container="behaviorlock-tracer-death-$network_suffix"
+tracer_death_output="$temp_dir/tracer-death.out"
+tracer_death_error="$temp_dir/tracer-death.err"
+set +e
+run_trace_container behaviorlock-tracer-death:dev "$tracer_death_container" > "$tracer_death_output" 2> "$tracer_death_error"
+tracer_death_exit=$?
+set -e
+if [ "$tracer_death_exit" -eq 0 ]; then
+  echo "killing the real tracer unexpectedly produced a successful container" >&2
+  exit 1
+fi
+grep -q 'BEHAVIORLOCK_REAL_TRACER_KILLED_V1' "$tracer_death_error"
+if grep -Eq '^BEHAVIORLOCK_TRACE_(V1|END)' "$tracer_death_output"; then
+  echo "real tracer death emitted a trusted envelope marker" >&2
+  exit 1
+fi
+if [ "$(docker inspect --format '{{.State.Running}}' "$tracer_death_container")" != false ]; then
+  echo "a tracee survived real tracer death" >&2
+  exit 1
+fi
+docker rm --force "$tracer_death_container" >/dev/null
+tracer_death_container=""
+
+docker build --pull=false --tag behaviorlock-resource-fixture:dev testdata/resource-fixture
+for fixture_mode in process descriptor tmpfs file output syscall; do
+  echo "resource fixture: exercising $fixture_mode boundary"
+  resource_container="behaviorlock-resource-$fixture_mode-$network_suffix"
+  resource_output="$temp_dir/resource-$fixture_mode.out"
+  resource_error="$temp_dir/resource-$fixture_mode.err"
+  set +e
+  run_resource_trace_container "$fixture_mode" "$resource_container" > "$resource_output" 2> "$resource_error"
+  resource_exit=$?
+  set -e
+  resource_running="$(docker inspect --format '{{.State.Running}}' "$resource_container")"
+  if [ "$resource_running" != false ]; then
+    remove_resource_container "$resource_container"
+    echo "$fixture_mode resource fixture required forced cleanup after its hard wall clock" >&2
+    tail -120 "$resource_error" >&2 || true
+    exit 1
+  fi
+  if [ "$resource_exit" -eq 124 ]; then
+    remove_resource_container "$resource_container"
+    echo "$fixture_mode resource fixture exceeded its hard wall clock" >&2
+    tail -120 "$resource_error" >&2 || true
+    exit 1
+  fi
+  case "$fixture_mode" in
+    process)
+      require_resource_match 'EAGAIN' 'process exhaustion did not expose EAGAIN' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-process-fixture-started' 'process exhaustion fixture did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'process exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
+      ;;
+    descriptor)
+      require_resource_match 'EMFILE' 'descriptor exhaustion did not expose EMFILE' "$resource_output" "$resource_error"
+      require_resource_match '/work/behaviorlock-descriptor-boundary' 'descriptor exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'descriptor exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
+      ;;
+    tmpfs)
+      require_resource_match '/tmp/behaviorlock-tmpfs-boundary' 'tmpfs exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'tmpfs exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
+      ;;
+    file)
+      require_resource_match '/work/behaviorlock-file-limit' 'file-size fixture did not open its bounded target' "$resource_output" "$resource_error"
+      require_resource_match 'EFBIG|SIGXFSZ' 'file-size exhaustion did not expose its kernel boundary' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'file-size exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
+      ;;
+    output)
+      require_resource_match '/work/behaviorlock-output-boundary' 'output exhaustion did not reach its marker' "$resource_output" "$resource_error"
+      require_resource_match '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' 'output exhaustion did not produce a nonzero trusted footer' "$resource_output" "$resource_error"
+      ;;
+    syscall)
+      if [ "$resource_exit" -eq 0 ] || grep -q '^BEHAVIORLOCK_TRACE_END ' "$resource_output"; then
+        echo "syscall-volume exhaustion produced a trusted completion" >&2
+        exit 1
+      fi
+      require_resource_match 'strace reported diagnostics|trace sentinel evidence is incomplete|No space left' 'syscall-volume exhaustion had no bounded failure diagnostic' "$resource_error" "$resource_output"
+      ;;
+  esac
+  remove_resource_container "$resource_container"
+done
+if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(resource|tracer-death)-'; then
+  echo "resource integration left a test container behind" >&2
+  exit 1
+fi
+
+for control_mode in timeout oom output signal; do
+  echo "control fixture: exercising $control_mode classification"
+  control_image="behaviorlock-control-$control_mode:dev"
+  docker build --pull=false \
+    --build-arg "BEHAVIORLOCK_CONTROL_MODE=$control_mode" \
+    --tag "$control_image" \
+    testdata/control-runner
+  control_profile="$temp_dir/control-$control_mode.profile.json"
+  control_error="$temp_dir/control-$control_mode.err"
+  control_timeout=2m
+  control_phase=lifecycle
+  expected_status=trace_incomplete
+  case "$control_mode" in
+    timeout) control_timeout=20s; expected_status=timed_out; control_phase=import ;;
+    oom) expected_status=resource_exhausted; control_phase=import ;;
+    output|signal) expected_status=trace_incomplete ;;
+  esac
+  set +e
+  "$temp_dir/behaviorlock" capture \
+    --experimental \
+    --phase "$control_phase" \
+    --runner "$control_image" \
+    --package is-number@7.0.0 \
+    --timeout "$control_timeout" \
+    --output "$control_profile" \
+    > "$temp_dir/control-$control_mode.out" 2> "$control_error"
+  control_exit=$?
+  set -e
+  if [ "$control_exit" -ne 2 ]; then
+    echo "$control_mode controlled capture exited $control_exit instead of 2" >&2
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  if ! jq -e '.capture.acquisition.networkMode == "registry-proxy-unix" and (.subject.registryIntegrity | length > 0)' "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture lost acquisition provenance" >&2
+    jq . "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  if ! jq -e --arg expected_status "$expected_status" '.result.status == $expected_status' "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture produced the wrong result status" >&2
+    jq .result "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  case "$control_mode" in
+    timeout) control_contract='.result.timedOut == true' ;;
+    oom) control_contract='.result.message | contains("memory limit")' ;;
+    output) control_contract='.result.truncated == true' ;;
+    signal) control_contract='.result.message | contains("signal-style exit code 137")' ;;
+  esac
+  if ! jq -e "$control_contract" "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture violated its result contract" >&2
+    jq .result "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  assert_no_capture_resources
+  echo "control fixture: $control_mode classification passed"
+done
+
+repeat_dir="$temp_dir/repeatability"
+mkdir -p "$repeat_dir"
+repeat_lines="$repeat_dir/runs.jsonl"
+: > "$repeat_lines"
+reference_profile_digest=""
+reference_behavior_digest=""
+reference_profile=""
+repeat_index=1
+while [ "$repeat_index" -le 10 ]; do
+  echo "repeatability fixture: run $repeat_index of 10"
+  repeat_envelope="$repeat_dir/run-$repeat_index.envelope"
+  repeat_raw="$repeat_dir/run-$repeat_index.strace"
+  repeat_profile="$repeat_dir/run-$repeat_index.profile.json"
+  run_trace_container behaviorlock-runner-fixture:dev > "$repeat_envelope"
+  awk '
+    /^BEHAVIORLOCK_TRACE_V1$/ { capture=1; next }
+    /^BEHAVIORLOCK_TRACE_END exit=/ { capture=0 }
+    capture { print }
+  ' "$repeat_envelope" > "$repeat_raw"
+  "$temp_dir/behaviorlock" profile \
+    --package behaviorlock-fixture@1.0.0 \
+    --trace "$repeat_raw" \
+    --output "$repeat_profile" >/dev/null
+  validation="$("$temp_dir/behaviorlock" validate --profile "$repeat_profile")"
+  profile_digest="$(printf '%s\n' "$validation" | grep -Eo 'sha256:[0-9a-f]{64}' | tail -1)"
+  behavior_digest="$(jq -S '[.behaviors[].id]' "$repeat_profile" | sha256sum | awk '{ print "sha256:" $1 }')"
+  count_digest="$(jq -S '[.behaviors[] | {id, count}]' "$repeat_profile" | sha256sum | awk '{ print "sha256:" $1 }')"
+  raw_digest="$(sha256sum "$repeat_raw" | awk '{ print "sha256:" $1 }')"
+  jq -nc \
+    --argjson run "$repeat_index" \
+    --arg profileDigest "$profile_digest" \
+    --arg behaviorDigest "$behavior_digest" \
+    --arg countDigest "$count_digest" \
+    --arg rawDigest "$raw_digest" \
+    '{run: $run, profileDigest: $profileDigest, behaviorDigest: $behaviorDigest, countDigest: $countDigest, rawDigest: $rawDigest}' \
+    >> "$repeat_lines"
+  if [ "$repeat_index" -eq 1 ]; then
+    reference_profile_digest="$profile_digest"
+    reference_behavior_digest="$behavior_digest"
+    reference_profile="$repeat_profile"
+  elif [ "$profile_digest" != "$reference_profile_digest" ] || [ "$behavior_digest" != "$reference_behavior_digest" ]; then
+    echo "trusted fixture repeatability changed semantic behavior" >&2
+    jq -s . "$repeat_lines" >&2
+    jq -S '[.behaviors[] | {id, type, operation, target, arguments, outcome, errno, sensitive, sourceCall}]' \
+      "$reference_profile" > "$repeat_dir/reference-behaviors.json"
+    jq -S '[.behaviors[] | {id, type, operation, target, arguments, outcome, errno, sensitive, sourceCall}]' \
+      "$repeat_profile" > "$repeat_dir/current-behaviors.json"
+    echo "normalized behavior set difference (reference then current):" >&2
+    diff -u "$repeat_dir/reference-behaviors.json" "$repeat_dir/current-behaviors.json" >&2 || true
+    exit 1
+  fi
+  repeat_index=$((repeat_index + 1))
+done
+jq -s '{runs: ., profileDigestVariants: ([.[].profileDigest] | unique | length), behaviorDigestVariants: ([.[].behaviorDigest] | unique | length), countDigestVariants: ([.[].countDigest] | unique | length), rawDigestVariants: ([.[].rawDigest] | unique | length)}' \
+  "$repeat_lines" > "$repeat_dir/report.json"
+jq -e '.profileDigestVariants == 1 and .behaviorDigestVariants == 1 and (.runs | length) == 10' "$repeat_dir/report.json" >/dev/null
+printf 'repeatability: 10 semantic runs stable; count variants=%s; raw variants=%s\n' \
+  "$(jq -r '.countDigestVariants' "$repeat_dir/report.json")" \
+  "$(jq -r '.rawDigestVariants' "$repeat_dir/report.json")"

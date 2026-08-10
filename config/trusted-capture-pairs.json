@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "pairs": [
+    {
+      "id": "is-number-6-to-7",
+      "baseline": "is-number@6.0.0",
+      "candidate": "is-number@7.0.0",
+      "purpose": "Small, inert public fixture for proving the trusted capture and attestation path"
+    }
+  ]
+}

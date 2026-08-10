@@ -1,0 +1,2 @@
+execve("/usr/bin/node", ["node", "install.js"], 0x0) = 0
++++ exited with 0 +++

@@ -1,0 +1,105 @@
+name: BehaviorLock dependency review comment
+
+on:
+  workflow_run:
+    workflows:
+      - BehaviorLock dependency review capture
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: behaviorlock-review-comment-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted default branch only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.23.x
+          cache: false
+
+      - name: Download artifact from the triggering run only
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: behaviorlock-review-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/behaviorlock-review
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Independently validate artifact and regenerate Markdown
+        id: verify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          go run ./cmd/review-ci verify \
+            --event "$GITHUB_EVENT_PATH" \
+            --directory "$RUNNER_TEMP/behaviorlock-review" \
+            --comment "$RUNNER_TEMP/behaviorlock-comment.md" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Create or update one bot-owned sticky comment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          COMMENT_PATH: ${{ steps.verify.outputs.comment-path }}
+          PULL_REQUEST_NUMBER: ${{ steps.verify.outputs.pull-request-number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- behaviorlock-dependency-review-v1 -->';
+            const issue_number = Number(process.env.PULL_REQUEST_NUMBER);
+            if (!Number.isSafeInteger(issue_number) || issue_number < 1) {
+              throw new Error('validated pull request number is invalid');
+            }
+            const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            if (!body.startsWith(marker) || Buffer.byteLength(body, 'utf8') > 60000) {
+              throw new Error('validated comment body is invalid');
+            }
+            const owned = [];
+            let inspected = 0;
+            for await (const response of github.paginate.iterator(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number,
+              per_page: 100,
+            })) {
+              inspected += response.data.length;
+              if (inspected > 1000) {
+                throw new Error('comment scan exceeded its bound');
+              }
+              owned.push(...response.data.filter((comment) =>
+                comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker)));
+            }
+            if (owned.length > 1) {
+              throw new Error('multiple bot-owned BehaviorLock comments require manual reconciliation');
+            }
+            if (owned.length === 1) {
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: owned[0].id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number,
+                body,
+              });
+            }
