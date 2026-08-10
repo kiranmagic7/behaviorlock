@@ -5,6 +5,8 @@ temp_dir="$(mktemp -d)"
 probe_proxy=""
 probe_network=""
 probe_volume=""
+tracer_death_container=""
+resource_container=""
 cleanup_integration() {
   if [ -n "$probe_proxy" ]; then
     docker rm --force "$probe_proxy" >/dev/null 2>&1 || true
@@ -15,6 +17,11 @@ cleanup_integration() {
   if [ -n "$probe_network" ]; then
     docker network rm "$probe_network" >/dev/null 2>&1 || true
   fi
+  for test_container in "$tracer_death_container" "$resource_container"; do
+    if [ -n "$test_container" ]; then
+      docker rm --force "$test_container" >/dev/null 2>&1 || true
+    fi
+  done
   rm -rf "$temp_dir"
 }
 trap cleanup_integration EXIT
@@ -26,7 +33,13 @@ profile_evidence="$profile.evidence.strace"
 
 run_trace_container() {
   runner_image="$1"
-  docker run --rm \
+  container_name="${2:-}"
+  if [ -n "$container_name" ]; then
+    set -- --name "$container_name"
+  else
+    set -- --rm
+  fi
+  docker run "$@" \
     --network none \
     --read-only \
     --user 0:0 \
@@ -41,6 +54,7 @@ run_trace_container() {
     --cpus 1 \
     --ulimit nofile=1024:1024 \
     --ulimit nproc=128:128 \
+    --ulimit fsize=67108864:67108864 \
     --ulimit core=0:0 \
     --shm-size 16m \
     --ipc none \
@@ -63,6 +77,96 @@ run_trace_container() {
     --env all_proxy= \
     --env no_proxy= \
     "$runner_image" trace behaviorlock-fixture@1.0.0
+}
+
+run_resource_trace_container() {
+  fixture_mode="$1"
+  container_name="$2"
+  pids_limit=128
+  memory_limit=256m
+  nofile_limit=1024
+  file_limit=67108864
+  work_size=64m
+  temporary_size=32m
+  trace_size=64m
+  case "$fixture_mode" in
+    process) pids_limit=32 ;;
+    descriptor) nofile_limit=64 ;;
+    tmpfs) work_size=4m ;;
+    file) file_limit=1048576 ;;
+    output) temporary_size=4m ;;
+    syscall) trace_size=8m ;;
+    timeout) ;;
+    *) echo "unknown resource trace mode: $fixture_mode" >&2; return 64 ;;
+  esac
+  timeout --signal=TERM --kill-after=3 30 \
+    docker run \
+    --name "$container_name" \
+    --network none \
+    --read-only \
+    --user 0:0 \
+    --cap-drop ALL \
+    --cap-add SETUID \
+    --cap-add SETGID \
+    --cap-add SYS_PTRACE \
+    --security-opt no-new-privileges:true \
+    --pids-limit "$pids_limit" \
+    --memory "$memory_limit" \
+    --memory-swap "$memory_limit" \
+    --cpus 1 \
+    --ulimit "nofile=$nofile_limit:$nofile_limit" \
+    --ulimit "nproc=$pids_limit:$pids_limit" \
+    --ulimit "fsize=$file_limit:$file_limit" \
+    --ulimit core=0:0 \
+    --shm-size 8m \
+    --ipc none \
+    --tmpfs "/work:rw,exec,nosuid,nodev,size=$work_size,uid=65532,gid=65532,mode=0700" \
+    --tmpfs "/tmp:rw,exec,nosuid,nodev,size=$temporary_size,uid=0,gid=0,mode=1777" \
+    --tmpfs /home/scanner:rw,nosuid,nodev,size=4m,uid=65532,gid=65532,mode=0700 \
+    --tmpfs "/trace:rw,nosuid,nodev,noexec,size=$trace_size,uid=0,gid=0,mode=0700" \
+    --env HOME=/home/scanner \
+    --env npm_config_cache=/work/.npm-cache \
+    --env npm_config_userconfig=/dev/null \
+    --env npm_config_audit=false \
+    --env npm_config_fund=false \
+    --env npm_config_update_notifier=false \
+    --env "BEHAVIORLOCK_RESOURCE_MODE=$fixture_mode" \
+    --env HTTP_PROXY= \
+    --env HTTPS_PROXY= \
+    --env ALL_PROXY= \
+    --env NO_PROXY= \
+    --env http_proxy= \
+    --env https_proxy= \
+    --env all_proxy= \
+    --env no_proxy= \
+    behaviorlock-resource-fixture:dev trace behaviorlock-resource-fixture@1.0.0
+}
+
+remove_resource_container() {
+  container_name="$1"
+  docker rm --force "$container_name" >/dev/null 2>&1 || true
+  if [ "$resource_container" = "$container_name" ]; then
+    resource_container=""
+  fi
+}
+
+assert_no_capture_resources() {
+  if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy)-'; then
+    echo "capture left an analysis container behind" >&2
+    exit 1
+  fi
+  if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^behaviorlock-analysis:'; then
+    echo "capture left a temporary image behind" >&2
+    exit 1
+  fi
+  if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-socket-'; then
+    echo "capture left an acquisition socket volume behind" >&2
+    exit 1
+  fi
+  if docker network ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-egress-'; then
+    echo "capture left an acquisition egress network behind" >&2
+    exit 1
+  fi
 }
 
 require_trace_match() {
@@ -315,22 +419,7 @@ grep -q '"networkMode": "registry-proxy-unix"' "$capture_profile"
 grep -q '"policyVersion": "npm-registry-connect-v1"' "$capture_profile"
 grep -q '"allowedAuthority": "registry.npmjs.org:443"' "$capture_profile"
 
-if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(prep|trace|proxy)-'; then
-  echo "capture left an analysis container behind" >&2
-  exit 1
-fi
-if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^behaviorlock-analysis:'; then
-  echo "capture left a temporary image behind" >&2
-  exit 1
-fi
-if docker volume ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-socket-'; then
-  echo "capture left an acquisition socket volume behind" >&2
-  exit 1
-fi
-if docker network ls --format '{{.Name}}' | grep -Eq '^behaviorlock-acq-egress-'; then
-  echo "capture left an acquisition egress network behind" >&2
-  exit 1
-fi
+assert_no_capture_resources
 
 docker build --pull=false --tag behaviorlock-tracer-failure:dev testdata/tracer-failure
 failure_output="$temp_dir/tracer-failure.out"
@@ -344,3 +433,174 @@ if grep -q '^BEHAVIORLOCK_TRACE_END ' "$failure_output"; then
   echo "failed tracer emitted a trusted completion footer" >&2
   exit 1
 fi
+
+docker build --pull=false --tag behaviorlock-tracer-death:dev testdata/tracer-death
+tracer_death_container="behaviorlock-tracer-death-$network_suffix"
+tracer_death_output="$temp_dir/tracer-death.out"
+tracer_death_error="$temp_dir/tracer-death.err"
+set +e
+run_trace_container behaviorlock-tracer-death:dev "$tracer_death_container" > "$tracer_death_output" 2> "$tracer_death_error"
+tracer_death_exit=$?
+set -e
+if [ "$tracer_death_exit" -eq 0 ]; then
+  echo "killing the real tracer unexpectedly produced a successful container" >&2
+  exit 1
+fi
+grep -q 'BEHAVIORLOCK_REAL_TRACER_KILLED_V1' "$tracer_death_error"
+if grep -Eq '^BEHAVIORLOCK_TRACE_(V1|END)' "$tracer_death_output"; then
+  echo "real tracer death emitted a trusted envelope marker" >&2
+  exit 1
+fi
+if [ "$(docker inspect --format '{{.State.Running}}' "$tracer_death_container")" != false ]; then
+  echo "a tracee survived real tracer death" >&2
+  exit 1
+fi
+docker rm --force "$tracer_death_container" >/dev/null
+tracer_death_container=""
+
+docker build --pull=false --tag behaviorlock-resource-fixture:dev testdata/resource-fixture
+for fixture_mode in process descriptor tmpfs file output syscall; do
+  resource_container="behaviorlock-resource-$fixture_mode-$network_suffix"
+  resource_output="$temp_dir/resource-$fixture_mode.out"
+  resource_error="$temp_dir/resource-$fixture_mode.err"
+  set +e
+  run_resource_trace_container "$fixture_mode" "$resource_container" > "$resource_output" 2> "$resource_error"
+  resource_exit=$?
+  set -e
+  if [ "$resource_exit" -eq 124 ]; then
+    echo "$fixture_mode resource fixture exceeded its hard wall clock" >&2
+    exit 1
+  fi
+  if [ "$(docker inspect --format '{{.State.Running}}' "$resource_container")" != false ]; then
+    echo "$fixture_mode resource fixture left a running tracee" >&2
+    exit 1
+  fi
+  case "$fixture_mode" in
+    process)
+      grep -q 'EAGAIN' "$resource_output"
+      grep -q '/work/behaviorlock-process-boundary' "$resource_output"
+      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      ;;
+    descriptor)
+      grep -q 'EMFILE' "$resource_output"
+      grep -q '/work/behaviorlock-descriptor-boundary' "$resource_output"
+      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      ;;
+    tmpfs)
+      grep -q '/tmp/behaviorlock-tmpfs-boundary' "$resource_output"
+      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      ;;
+    file)
+      grep -q '/work/behaviorlock-file-boundary' "$resource_output"
+      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      ;;
+    output)
+      grep -q '/work/behaviorlock-output-boundary' "$resource_output"
+      grep -Eq '^BEHAVIORLOCK_TRACE_END exit=[1-9][0-9]*$' "$resource_output"
+      ;;
+    syscall)
+      if [ "$resource_exit" -eq 0 ] || grep -q '^BEHAVIORLOCK_TRACE_END ' "$resource_output"; then
+        echo "syscall-volume exhaustion produced a trusted completion" >&2
+        exit 1
+      fi
+      grep -Eq 'strace reported diagnostics|trace sentinel evidence is incomplete|No space left' "$resource_error"
+      ;;
+  esac
+  remove_resource_container "$resource_container"
+done
+if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(resource|tracer-death)-'; then
+  echo "resource integration left a test container behind" >&2
+  exit 1
+fi
+
+for control_mode in timeout oom output signal; do
+  control_image="behaviorlock-control-$control_mode:dev"
+  docker build --pull=false \
+    --build-arg "BEHAVIORLOCK_CONTROL_MODE=$control_mode" \
+    --tag "$control_image" \
+    testdata/control-runner
+  control_profile="$temp_dir/control-$control_mode.profile.json"
+  control_error="$temp_dir/control-$control_mode.err"
+  control_timeout=2m
+  expected_status=trace_incomplete
+  case "$control_mode" in
+    timeout) control_timeout=20s; expected_status=timed_out ;;
+    oom) expected_status=resource_exhausted ;;
+    output|signal) expected_status=trace_incomplete ;;
+  esac
+  set +e
+  "$temp_dir/behaviorlock" capture \
+    --experimental \
+    --runner "$control_image" \
+    --package is-number@7.0.0 \
+    --timeout "$control_timeout" \
+    --output "$control_profile" \
+    > "$temp_dir/control-$control_mode.out" 2> "$control_error"
+  control_exit=$?
+  set -e
+  if [ "$control_exit" -ne 2 ]; then
+    echo "$control_mode controlled capture exited $control_exit instead of 2" >&2
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  jq -e '.capture.acquisition.networkMode == "registry-proxy-unix" and (.subject.registryIntegrity | length > 0)' "$control_profile" >/dev/null
+  jq -e --arg expected_status "$expected_status" '.result.status == $expected_status' "$control_profile" >/dev/null
+  case "$control_mode" in
+    timeout) jq -e '.result.timedOut == true' "$control_profile" >/dev/null ;;
+    oom) grep -q 'memory limit' "$control_profile" ;;
+    output) jq -e '.result.truncated == true' "$control_profile" >/dev/null ;;
+    signal) grep -q 'signal-style exit code 137' "$control_profile" ;;
+  esac
+  assert_no_capture_resources
+done
+
+repeat_dir="$temp_dir/repeatability"
+mkdir -p "$repeat_dir"
+repeat_lines="$repeat_dir/runs.jsonl"
+: > "$repeat_lines"
+reference_profile_digest=""
+reference_behavior_digest=""
+repeat_index=1
+while [ "$repeat_index" -le 10 ]; do
+  repeat_envelope="$repeat_dir/run-$repeat_index.envelope"
+  repeat_raw="$repeat_dir/run-$repeat_index.strace"
+  repeat_profile="$repeat_dir/run-$repeat_index.profile.json"
+  run_trace_container behaviorlock-runner-fixture:dev > "$repeat_envelope"
+  awk '
+    /^BEHAVIORLOCK_TRACE_V1$/ { capture=1; next }
+    /^BEHAVIORLOCK_TRACE_END exit=/ { capture=0 }
+    capture { print }
+  ' "$repeat_envelope" > "$repeat_raw"
+  "$temp_dir/behaviorlock" profile \
+    --package behaviorlock-fixture@1.0.0 \
+    --trace "$repeat_raw" \
+    --output "$repeat_profile" >/dev/null
+  validation="$("$temp_dir/behaviorlock" validate --profile "$repeat_profile")"
+  profile_digest="$(printf '%s\n' "$validation" | grep -Eo 'sha256:[0-9a-f]{64}' | tail -1)"
+  behavior_digest="$(jq -S '[.behaviors[].id]' "$repeat_profile" | sha256sum | awk '{ print "sha256:" $1 }')"
+  count_digest="$(jq -S '[.behaviors[] | {id, count}]' "$repeat_profile" | sha256sum | awk '{ print "sha256:" $1 }')"
+  raw_digest="$(sha256sum "$repeat_raw" | awk '{ print "sha256:" $1 }')"
+  jq -nc \
+    --argjson run "$repeat_index" \
+    --arg profileDigest "$profile_digest" \
+    --arg behaviorDigest "$behavior_digest" \
+    --arg countDigest "$count_digest" \
+    --arg rawDigest "$raw_digest" \
+    '{run: $run, profileDigest: $profileDigest, behaviorDigest: $behaviorDigest, countDigest: $countDigest, rawDigest: $rawDigest}' \
+    >> "$repeat_lines"
+  if [ "$repeat_index" -eq 1 ]; then
+    reference_profile_digest="$profile_digest"
+    reference_behavior_digest="$behavior_digest"
+  elif [ "$profile_digest" != "$reference_profile_digest" ] || [ "$behavior_digest" != "$reference_behavior_digest" ]; then
+    echo "trusted fixture repeatability changed semantic behavior" >&2
+    jq -s . "$repeat_lines" >&2
+    exit 1
+  fi
+  repeat_index=$((repeat_index + 1))
+done
+jq -s '{runs: ., profileDigestVariants: ([.[].profileDigest] | unique | length), behaviorDigestVariants: ([.[].behaviorDigest] | unique | length), countDigestVariants: ([.[].countDigest] | unique | length), rawDigestVariants: ([.[].rawDigest] | unique | length)}' \
+  "$repeat_lines" > "$repeat_dir/report.json"
+jq -e '.profileDigestVariants == 1 and .behaviorDigestVariants == 1 and (.runs | length) == 10' "$repeat_dir/report.json" >/dev/null
+printf 'repeatability: 10 semantic runs stable; count variants=%s; raw variants=%s\n' \
+  "$(jq -r '.countDigestVariants' "$repeat_dir/report.json")" \
+  "$(jq -r '.rawDigestVariants' "$repeat_dir/report.json")"
