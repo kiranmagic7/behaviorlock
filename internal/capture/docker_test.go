@@ -3,6 +3,7 @@ package capture
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -234,6 +235,7 @@ func TestAcquisitionProxyAuditRejectsAnyDeniedRequest(t *testing.T) {
 func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 	t.Parallel()
 	runner := &DockerRunner{dockerPath: "docker"}
+	observedCanary := ""
 	runner.run = func(_ context.Context, arguments []string, _, _ int64) (commandResult, error) {
 		switch arguments[0] {
 		case "version":
@@ -281,7 +283,15 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 			if arguments[len(arguments)-4] != testPreparedImageID {
 				t.Fatalf("trace used mutable preparation image reference: %q", arguments)
 			}
-			return commandResult{Stdout: []byte("BEHAVIORLOCK_TRACE_V1\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-start\", O_RDONLY) = 3\nexecve(\"/bin/true\", [\"true\"], 0x0) = 0\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-end\", O_RDONLY) = 3\nBEHAVIORLOCK_TRACE_END exit=0\n")}, nil
+			for _, argument := range arguments {
+				if strings.HasPrefix(argument, "GITHUB_TOKEN=") {
+					observedCanary = strings.TrimPrefix(argument, "GITHUB_TOKEN=")
+				}
+			}
+			if observedCanary == "" {
+				t.Fatal("trace arguments omitted the generated GitHub canary")
+			}
+			return commandResult{Stdout: []byte("BEHAVIORLOCK_TRACE_V1\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-start\", O_RDONLY) = 3\nexecve(\"/bin/echo\", [\"echo\", \"" + observedCanary + "\"], 0x0) = 0\nopenat(AT_FDCWD, \"/opt/behaviorlock/sentinel-end\", O_RDONLY) = 3\nBEHAVIORLOCK_TRACE_END exit=0\n")}, nil
 		default:
 			t.Fatalf("unexpected docker arguments: %q", arguments)
 			return commandResult{}, nil
@@ -312,6 +322,22 @@ func TestCaptureCompletesOnlyWithValidEnvelope(t *testing.T) {
 	}
 	if profile.Capture.Acquisition == nil || profile.Capture.Acquisition.NetworkMode != "registry-proxy-unix" {
 		t.Fatalf("capture omitted acquisition fingerprint: %#v", profile.Capture.Acquisition)
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), observedCanary) {
+		t.Fatal("normalized profile retained a generated canary value")
+	}
+	var matched bool
+	for _, behavior := range profile.Behaviors {
+		if slices.Contains(behavior.CanaryIDs, "canary:github-token") && slices.Contains(behavior.Arguments, "$CANARY[github-token]") {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Fatalf("capture did not replace visible canary movement with its stable identifier: %#v", profile.Behaviors)
 	}
 }
 
