@@ -147,7 +147,7 @@ Profiles must:
 1. Be structurally valid, evidence-verified, and complete
 2. Describe the same npm package
 3. Use the same trace integrity mode
-4. Use the same runner image ID and architecture
+4. Use the same runner image reference, resolved image ID, and architecture
 5. Use the same Node, npm, and `strace` versions
 6. Use the same network mode, sandbox profile, and coverage scope
 
@@ -159,7 +159,7 @@ The comparator calculates added and removed behavior keys. Added behavior is cla
 
 ### `doctor`
 
-Checks that Docker is available and the local runner tag resolves to a valid content ID.
+Checks that Docker is available and the requested `--runner` reference resolves to a valid content ID. Implicit or explicit `latest` references are rejected.
 
 ### `capture`
 

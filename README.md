@@ -28,7 +28,7 @@ BehaviorLock reports the shell launch and credential path read as new observatio
 | Native Windows or macOS tracing | Not supported |
 | Evidence integrity | Raw trace retained separately and verified by digest and line references |
 | Acquisition egress | Preparation has `--network none`; an exact-host proxy is reached through a private Unix socket |
-| Profile authenticity | Unsigned, not attested |
+| Profile authenticity | Ordinary profiles are unsigned; a protected, disabled-by-default attestation workflow exists for reviewed fixtures |
 | Tagged release | None |
 
 ## What it observes
@@ -106,16 +106,17 @@ Docker is required. Build the pinned runner image from this repository first.
 ```bash
 make runner
 make build
-bin/behaviorlock doctor
+bin/behaviorlock doctor --runner behaviorlock-runner:dev
 
 bin/behaviorlock capture \
   --experimental \
+  --runner behaviorlock-runner:dev \
   --package is-number@7.0.0 \
   --timeout 2m \
   --output is-number.profile.json
 ```
 
-`--experimental` is mandatory. The command records the exact runner image ID, architecture, Node version, npm version, `strace` version, package registry integrity, dependency lock digest, acquisition policy version, allowed authority, and proxy image ID. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses immutable image IDs after resolution so a mutable local tag cannot silently change the captured environment.
+`--experimental` is mandatory. `--runner` must name an explicit non-`latest` tag, local content ID, or `@sha256` digest reference. The command records that reference, its resolved image ID, architecture, Node version, npm version, `strace` version, package registry integrity, dependency lock digest, acquisition policy version, allowed authority, and proxy image ID. It also retains `is-number.profile.json.evidence.strace` unless `--evidence-output` selects another path. Docker execution uses the immutable image ID after resolution so a mutable local tag cannot silently change the captured environment.
 
 Do not capture an unknown package on a machine that contains valuable data, credentials, trusted workloads, or access to private infrastructure.
 
@@ -152,8 +153,8 @@ The report exposes `reviewRequired` and `highestReviewLevel`; it does not issue 
 ## Command reference
 
 ```text
-behaviorlock doctor
-behaviorlock capture --experimental --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
+behaviorlock doctor [--runner image:tag-or-digest]
+behaviorlock capture --experimental --runner image:tag-or-digest --package name@1.2.3 --output profile.json [--evidence-output raw.strace]
 behaviorlock profile --package name@1.2.3 --trace raw.strace --output profile.json [--evidence-output retained.strace]
 behaviorlock compare --baseline old.json --candidate new.json --output report.json [--baseline-evidence old.strace --candidate-evidence new.strace]
 behaviorlock validate --profile profile.json [--evidence raw.strace]
@@ -200,12 +201,13 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 3. [Platform support](docs/PLATFORM_SUPPORT.md) describes Linux, macOS, and Windows support.
 4. [Evidence model](docs/EVIDENCE_MODEL.md) defines retained artifacts, line references, validation, and privacy.
 5. [Acquisition proxy](docs/ACQUISITION_PROXY.md) defines registry egress enforcement and its residual risks.
-6. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
-7. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
-8. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
-9. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
-10. [Roadmap](ROADMAP.md) contains the release gates.
-11. [Security policy](SECURITY.md) explains private vulnerability reporting.
+6. [Provenance and releases](docs/PROVENANCE_AND_RELEASES.md) defines trusted bundles, proof collection, SBOMs, signing, and disabled publication controls.
+7. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
+8. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
+9. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
+10. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
+11. [Roadmap](ROADMAP.md) contains the release gates.
+12. [Security policy](SECURITY.md) explains private vulnerability reporting.
 
 ## Development
 

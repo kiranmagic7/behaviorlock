@@ -18,6 +18,11 @@ All notable changes will be documented here. The project follows Keep a Changelo
 10. Semantic JSON Schema conformance tests
 11. Explicit `attestation: none` provenance boundary for unsigned profiles
 12. Separate user guide, platform support guide, technical reference, and security audit record
+13. Raw evidence companions with whole-artifact and exact-line verification
+14. Exact-registry acquisition proxy reached from network-none preparation through a private Unix socket
+15. Explicit runner selection with immutable image resolution and runner-reference comparability
+16. No-publish release dry run with archive and runner SBOMs
+17. Fail-closed 14-gate release proof validator and protected trusted-profile attestation workflow
 
 ### Security
 
@@ -32,3 +37,4 @@ All notable changes will be documented here. The project follows Keep a Changelo
 9. Docker client proxy variables are explicitly cleared in every runner container.
 10. Protected main DCO verification recognizes GitHub created squash identities without relaxing strict pull request checks.
 11. CodeQL uses the fully pinned v4 action line before the v3 retirement deadline.
+12. Release and attestation workflows are manual, SHA-pinned, least-privilege, protected-environment gated, and disabled by repository variables by default.

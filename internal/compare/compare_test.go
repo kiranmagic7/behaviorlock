@@ -1,6 +1,7 @@
 package compare
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kiranmagic7/behaviorlock/internal/model"
@@ -101,5 +102,15 @@ func TestProfilesRequireExplicitExternalAcknowledgement(t *testing.T) {
 	}
 	if _, err := ProfilesWithOptions(baseline, candidate, "test", Options{AllowExternal: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProfilesRejectDifferentRunnerReferencesForSameContentID(t *testing.T) {
+	t.Parallel()
+	baseline := completeProfile("1.0.0")
+	candidate := completeProfile("1.1.0")
+	candidate.Capture.RunnerImage = "ghcr.io/kiranmagic7/behaviorlock-runner:v0.1.0"
+	if _, err := Profiles(baseline, candidate, "test"); err == nil || !strings.Contains(err.Error(), "runner image reference") {
+		t.Fatalf("different runner references were not rejected: %v", err)
 	}
 }

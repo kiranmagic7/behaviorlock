@@ -1,0 +1,63 @@
+version: 2
+
+project_name: behaviorlock
+
+builds:
+  - id: behaviorlock
+    main: ./cmd/behaviorlock
+    binary: behaviorlock
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/kiranmagic7/behaviorlock/internal/cli.injectedVersion={{ .Version }}
+
+archives:
+  - id: behaviorlock
+    ids:
+      - behaviorlock
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - SECURITY.md
+
+checksum:
+  name_template: behaviorlock_checksums.txt
+  algorithm: sha256
+
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+    cmd: syft
+    args:
+      - "${artifact}"
+      - --output
+      - "spdx-json=${document}"
+      - --enrich
+      - all
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: true
+  replace_existing_draft: false

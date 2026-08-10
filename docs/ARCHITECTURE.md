@@ -39,7 +39,7 @@ The semantic digest excludes duration, evidence artifact metadata, line referenc
 
 Two complete profiles for the same package and equivalent runner environment are compared as deterministic sets. External unverified traces require explicit caller acknowledgement. Added observations receive fixed rule identifiers and review levels. Removed observations are retained without being interpreted as safer.
 
-Profiles declare `attestation: none`. Environment fields and retained evidence allow consistency and comparability checks but are not authenticated. A future signed provenance format is a separate release gate.
+Ordinary profiles declare `attestation: none`. Environment fields and retained evidence allow consistency and comparability checks but are not authenticated. The protected trusted-profile workflow can package two reviewed profiles and their evidence into one GitHub-attested bundle. Verification binds that bundle to its repository, workflow, protected source commit, hosted runner, runner image, and acquisition policy before cross-workflow use. It does not upgrade arbitrary profiles or contributor artifacts into trusted evidence.
 
 The report summary is:
 

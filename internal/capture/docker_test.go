@@ -294,6 +294,53 @@ func TestCaptureRejectsInvalidTimeoutBeforeDocker(t *testing.T) {
 	}
 }
 
+func TestRunnerImageReferenceValidation(t *testing.T) {
+	t.Parallel()
+	valid := []string{
+		"behaviorlock-runner:dev",
+		"ghcr.io/kiranmagic7/behaviorlock-runner:v0.1.0",
+		"ghcr.io/kiranmagic7/behaviorlock-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	for _, value := range valid {
+		if got, err := normalizeRunnerImage(value); err != nil || got != value {
+			t.Errorf("valid reference %q rejected: got=%q err=%v", value, got, err)
+		}
+	}
+	invalid := []string{
+		"behaviorlock-runner",
+		"behaviorlock-runner:latest",
+		"-v",
+		"https://registry.invalid/image:v1",
+		"registry.invalid/Upper/image:v1",
+		"behaviorlock-runner:dev\n--privileged",
+		"ghcr.io/kiranmagic7/behaviorlock-runner@sha256:short",
+	}
+	for _, value := range invalid {
+		if _, err := normalizeRunnerImage(value); err == nil {
+			t.Errorf("invalid reference %q accepted", value)
+		}
+	}
+}
+
+func TestCaptureRejectsInvalidRunnerBeforeDocker(t *testing.T) {
+	t.Parallel()
+	runner := &DockerRunner{dockerPath: "docker"}
+	runner.run = func(_ context.Context, _ []string, _, _ int64) (commandResult, error) {
+		t.Fatal("docker must not run for an invalid runner reference")
+		return commandResult{}, nil
+	}
+	spec, err := npm.ParseExactSpec("example@1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Capture(context.Background(), spec, Config{
+		Timeout: time.Minute, ToolVersion: "test", RunnerImage: "--privileged",
+	}); err == nil || !strings.Contains(err.Error(), "runner image") {
+		t.Fatalf("invalid runner reference was not rejected: %v", err)
+	}
+}
+
 func TestCaptureRejectsCommitWithoutContentID(t *testing.T) {
 	t.Parallel()
 	runner := &DockerRunner{dockerPath: "docker"}

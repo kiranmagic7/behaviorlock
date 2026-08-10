@@ -96,7 +96,7 @@ The CLI builds on Linux and macOS. Docker Desktop may let macOS or Windows opera
 
 ## Current maturity
 
-There is no tagged release. Installation requires building from source, and capture requires a locally built runner image. Profiles are unsigned, so policy jobs must generate their own profiles in a trusted workflow.
+There is no tagged release. Installation requires building from source, and capture requires a locally built runner image or an explicitly selected image reference. Ordinary profiles are unsigned. A disabled-by-default protected workflow can produce a GitHub-attested bundle for one reviewed fixture pair, but contributor-supplied profiles remain untrusted.
 
 This is useful for experiments and design partnerships. It is not yet a finished security product.
 
@@ -106,4 +106,5 @@ This is useful for experiments and design partnerships. It is not yet a finished
 2. Read [platform support](PLATFORM_SUPPORT.md) before planning cross platform use.
 3. Read the [technical reference](TECHNICAL_REFERENCE.md) to understand profile compatibility.
 4. Read the [threat model](THREAT_MODEL.md) before running real capture.
-5. Use [GitHub Discussions](https://github.com/kiranmagic7/behaviorlock/discussions) for questions and design conversation.
+5. Read [provenance and release controls](PROVENANCE_AND_RELEASES.md) before using artifacts across workflows.
+6. Use [GitHub Discussions](https://github.com/kiranmagic7/behaviorlock/discussions) for questions and design conversation.

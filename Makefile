@@ -25,7 +25,7 @@ check:
 	shellcheck runner/*.sh scripts/*.sh testdata/tracer-failure/*.sh
 	./scripts/test-dco.sh
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-	jq empty schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json
+	jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json
 
 runner:
 	docker build --pull=false --tag behaviorlock-runner:dev runner

@@ -30,6 +30,10 @@ Gate 13 has a schema v2 implementation and local regression coverage. It remains
 
 Gate 6 has a network-none preparation and exact-registry Unix-socket proxy implementation. It remains open until hosted integration proves direct public, private, metadata, and gateway denial; exact registry success; nonregistry rejection; unprivileged proxy runtime; and complete resource cleanup.
 
+Gate 14 has a protected trusted-profile workflow, deterministic bundle, strict verifier, and GitHub artifact attestation implementation. It remains open until the workflow runs successfully from protected `main` for the reviewed fixture and the resulting bundle is independently verified. Pull request artifacts never satisfy this gate.
+
+The release workflow remains disabled by default. It queries fresh GitHub check evidence for the exact protected commit and rejects missing, skipped, stale, duplicated, or failed gate proofs. No release tag, draft, container image, or public artifact is created merely because the workflow files exist.
+
 ## Later options
 
 Only after the first gate passes:

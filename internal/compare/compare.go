@@ -37,14 +37,15 @@ func ProfilesWithOptions(baseline, candidate model.Profile, toolVersion string, 
 		return model.Diff{}, fmt.Errorf("external unverified profiles require explicit allowExternal acknowledgement")
 	}
 	for label, values := range map[string][2]string{
-		"runner image id": {baseline.Capture.RunnerImageID, candidate.Capture.RunnerImageID},
-		"architecture":    {baseline.Capture.Architecture, candidate.Capture.Architecture},
-		"node version":    {baseline.Capture.NodeVersion, candidate.Capture.NodeVersion},
-		"npm version":     {baseline.Capture.NPMVersion, candidate.Capture.NPMVersion},
-		"strace version":  {baseline.Capture.StraceVersion, candidate.Capture.StraceVersion},
-		"network mode":    {baseline.Capture.NetworkMode, candidate.Capture.NetworkMode},
-		"sandbox profile": {baseline.Capture.SandboxProfile, candidate.Capture.SandboxProfile},
-		"coverage scope":  {baseline.Capture.Coverage.Scope, candidate.Capture.Coverage.Scope},
+		"runner image reference": {baseline.Capture.RunnerImage, candidate.Capture.RunnerImage},
+		"runner image id":        {baseline.Capture.RunnerImageID, candidate.Capture.RunnerImageID},
+		"architecture":           {baseline.Capture.Architecture, candidate.Capture.Architecture},
+		"node version":           {baseline.Capture.NodeVersion, candidate.Capture.NodeVersion},
+		"npm version":            {baseline.Capture.NPMVersion, candidate.Capture.NPMVersion},
+		"strace version":         {baseline.Capture.StraceVersion, candidate.Capture.StraceVersion},
+		"network mode":           {baseline.Capture.NetworkMode, candidate.Capture.NetworkMode},
+		"sandbox profile":        {baseline.Capture.SandboxProfile, candidate.Capture.SandboxProfile},
+		"coverage scope":         {baseline.Capture.Coverage.Scope, candidate.Capture.Coverage.Scope},
 	} {
 		if values[0] != values[1] {
 			return model.Diff{}, fmt.Errorf("profiles have different %s: %s and %s", label, values[0], values[1])

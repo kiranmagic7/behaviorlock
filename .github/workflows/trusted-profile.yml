@@ -1,0 +1,70 @@
+name: Trusted profile attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: Reviewed inert package pair
+        required: true
+        type: choice
+        options:
+          - is-number-6-to-7
+      confirmation:
+        description: Type ATTEST REVIEWED FIXTURE to authorize the trusted capture
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-profile-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  trusted-profile:
+    name: gate-14-trusted-profile-provenance
+    if: >-
+      github.repository == 'kiranmagic7/behaviorlock' &&
+      github.ref == 'refs/heads/main' &&
+      vars.BEHAVIORLOCK_TRUSTED_PROFILE_ENABLED == 'true' &&
+      inputs.confirmation == 'ATTEST REVIEWED FIXTURE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: trusted-profile
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.25.x
+          cache: false
+      - name: Build reviewed profiles and deterministic bundle
+        run: ./scripts/build-trusted-profile-bundle.sh "${{ inputs.pair }}" trusted-output
+      - name: Attest the exact bundle
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: trusted-output/trusted-profile.tar.gz
+          show-summary: true
+      - name: Verify bundle contents and GitHub provenance
+        env:
+          BEHAVIORLOCK_BIN: ${{ github.workspace }}/trusted-output/behaviorlock
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          EXPECTED_SOURCE_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/verify-trusted-profile.sh trusted-output/trusted-profile.tar.gz
+      - name: Retain the attested bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-profile-${{ github.sha }}-${{ github.run_id }}
+          path: trusted-output/trusted-profile.tar.gz
+          if-no-files-found: error
+          retention-days: 14

@@ -18,8 +18,6 @@ import (
 	"github.com/kiranmagic7/behaviorlock/internal/trace"
 )
 
-const Version = "0.1.0-dev"
-
 func Run(arguments []string, stdout, stderr io.Writer) int {
 	if len(arguments) == 0 {
 		printUsage(stderr)
@@ -58,6 +56,7 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 	output := flags.String("output", "-", "profile output path or - for stdout")
 	evidenceOutput := flags.String("evidence-output", "", "raw evidence output path; defaults beside a file profile")
 	timeout := flags.Duration("timeout", 2*time.Minute, "capture wall clock limit")
+	runnerImage := flags.String("runner", capture.RunnerImage, "runner image tag, digest reference, or local content ID")
 	experimental := flags.Bool("experimental", false, "acknowledge the experimental capture boundary")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
@@ -81,7 +80,9 @@ func runCapture(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "behaviorlock: %s\n", safeText(err.Error()))
 		return 2
 	}
-	profile, rawEvidence, captureErr := runner.CaptureWithEvidence(context.Background(), spec, capture.Config{Timeout: *timeout, ToolVersion: Version})
+	profile, rawEvidence, captureErr := runner.CaptureWithEvidence(context.Background(), spec, capture.Config{
+		Timeout: *timeout, ToolVersion: Version, RunnerImage: *runnerImage,
+	})
 	if profile.Subject.Name != "" {
 		if err := writeProfileArtifacts(*output, evidencePath, rawEvidence, profile, stdout); err != nil {
 			fmt.Fprintf(stderr, "behaviorlock: write profile: %s\n", safeText(err.Error()))
@@ -257,6 +258,7 @@ func runValidate(arguments []string, stdout, stderr io.Writer) int {
 func runDoctor(arguments []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	runnerImage := flags.String("runner", capture.RunnerImage, "runner image tag, digest reference, or local content ID")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -271,11 +273,11 @@ func runDoctor(arguments []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := runner.Doctor(ctx); err != nil {
+	if err := runner.Doctor(ctx, *runnerImage); err != nil {
 		fmt.Fprintf(stderr, "behaviorlock: %s\n", safeText(err.Error()))
 		return 2
 	}
-	fmt.Fprintln(stdout, "docker and the local BehaviorLock runner image are available")
+	fmt.Fprintf(stdout, "docker and runner image %s are available\n", safeText(*runnerImage))
 	return 0
 }
 

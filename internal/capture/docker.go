@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ const (
 type Config struct {
 	Timeout     time.Duration
 	ToolVersion string
+	RunnerImage string
 }
 
 type PrepareMetadata struct {
@@ -87,16 +89,27 @@ func NewDockerRunner() (*DockerRunner, error) {
 	return runner, nil
 }
 
-func (runner *DockerRunner) Doctor(ctx context.Context) error {
+func (runner *DockerRunner) Doctor(ctx context.Context, runnerImage string) error {
+	runnerImage, err := normalizeRunnerImage(runnerImage)
+	if err != nil {
+		return err
+	}
+	if err := runner.checkDocker(ctx); err != nil {
+		return err
+	}
+	if _, _, err := runner.imageDetails(ctx, runnerImage); err != nil {
+		return fmt.Errorf("runner image %s is missing or invalid; build it or provide --runner: %w", runnerImage, err)
+	}
+	return nil
+}
+
+func (runner *DockerRunner) checkDocker(ctx context.Context) error {
 	result, err := runner.run(ctx, []string{"version", "--format", "{{.Server.Version}}"}, 64<<10, 64<<10)
 	if err != nil {
 		return fmt.Errorf("docker daemon is unavailable: %w", err)
 	}
 	if result.ExitCode != 0 || strings.TrimSpace(string(result.Stdout)) == "" {
 		return fmt.Errorf("docker daemon check failed: %s", safeDiagnostic(result.Stderr))
-	}
-	if _, _, err := runner.imageDetails(ctx, RunnerImage); err != nil {
-		return fmt.Errorf("runner image %s is missing; run `make runner` from the repository", RunnerImage)
 	}
 	return nil
 }
@@ -110,16 +123,20 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 	if config.Timeout < 10*time.Second || config.Timeout > 10*time.Minute {
 		return model.Profile{}, nil, errors.New("capture timeout must be between 10 seconds and 10 minutes")
 	}
+	runnerImage, err := normalizeRunnerImage(config.RunnerImage)
+	if err != nil {
+		return model.Profile{}, nil, err
+	}
 	captureContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
 	profile := model.NewProfile(model.Subject{
 		Ecosystem: "npm", Name: spec.Name, Version: spec.Version, PURL: spec.PURL(),
 	}, config.ToolVersion)
-	profile.Capture.RunnerImage = RunnerImage
+	profile.Capture.RunnerImage = runnerImage
 	profile.Capture.SandboxProfile = SandboxProfile
 	profile.Capture.TraceIntegrity = "isolated-root-tracer"
 	profile.Capture.Experimental = true
-	if err := runner.Doctor(captureContext); err != nil {
+	if err := runner.checkDocker(captureContext); err != nil {
 		return withoutEvidence(timedOutProfile(profile, captureContext, err))
 	}
 	runID, err := randomID()
@@ -139,7 +156,7 @@ func (runner *DockerRunner) CaptureWithEvidence(ctx context.Context, spec npm.Sp
 		networks:   []string{egressNetwork},
 	})
 
-	runnerImageID, architecture, err := runner.imageDetails(captureContext, RunnerImage)
+	runnerImageID, architecture, err := runner.imageDetails(captureContext, runnerImage)
 	if err != nil {
 		return withoutEvidence(timedOutProfile(profile, captureContext, err))
 	}
@@ -556,6 +573,27 @@ func validSHA256(value string) bool {
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	return err == nil
+}
+
+var runnerReferencePattern = regexp.MustCompile(`^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/)*(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?:(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})|(?:@sha256:[0-9a-f]{64}))$`)
+
+func normalizeRunnerImage(value string) (string, error) {
+	if value == "" {
+		value = RunnerImage
+	}
+	if len(value) > 256 || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") ||
+		strings.Contains(value, "://") || !runnerReferencePattern.MatchString(value) {
+		return "", errors.New("runner image must be an explicit Docker tag, sha256 content ID, or @sha256 digest reference")
+	}
+	lastSlash := strings.LastIndexByte(value, '/')
+	lastColon := strings.LastIndexByte(value, ':')
+	if !strings.Contains(value, "@sha256:") && lastColon <= lastSlash {
+		return "", errors.New("runner image must include an explicit non-latest tag or sha256 digest")
+	}
+	if strings.HasSuffix(value, ":latest") {
+		return "", errors.New("runner image tag latest is not allowed")
+	}
+	return value, nil
 }
 
 func randomID() (string, error) {
