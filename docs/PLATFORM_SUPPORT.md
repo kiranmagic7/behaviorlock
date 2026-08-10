@@ -9,6 +9,7 @@ BehaviorLock has two platform questions: where the CLI can run, and which operat
 | Build the Go CLI | Verified | Verified | Not yet tested in CI |
 | Parse an existing Linux `strace` file | Expected | Expected | Not yet tested in CI |
 | Compare compatible profile JSON | Expected | Expected | Not yet tested in CI |
+| Run the inert benchmark and demo | Verified | Expected | Not yet tested in CI |
 | Run the full capture integration | Verified on GitHub hosted Linux | Not verified | Not verified |
 | Observe native operating system behavior | Linux only | No | No |
 
@@ -16,7 +17,9 @@ BehaviorLock has two platform questions: where the CLI can run, and which operat
 
 Linux is the observed target platform for `0.1.0-dev`. The runner depends on Linux containers, Linux permissions, Linux capabilities, `/proc`, and `strace`.
 
-The complete Docker integration runs on GitHub hosted Ubuntu. It checks the package uid, effective capabilities, trace isolation, blocked default networking, immutable capture evidence, and cleanup. Feature-branch checks additionally exercise generated canaries, import resolution, and an unrouted inert sinkhole; those checks are not release evidence until reviewed and merged.
+The complete Docker integration runs on GitHub hosted Ubuntu. It checks the package uid, effective capabilities, trace isolation, blocked default networking, immutable capture evidence, resource boundaries, semantic repeatability, and cleanup. Feature-branch checks additionally exercise generated canaries, import resolution, and an unrouted inert sinkhole; those checks are not release evidence until reviewed and merged.
+
+The inert benchmark and usability journey use only local files and the portable Go parser. They run in CI without downloading or executing an npm package. They do not replace the Linux Docker integration.
 
 ## macOS
 

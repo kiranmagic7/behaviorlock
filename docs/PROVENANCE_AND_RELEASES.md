@@ -41,6 +41,8 @@ scripts/verify-trusted-profile.sh trusted-profile.tar.gz
 
 The proof manifest is collected by the protected workflow from GitHub's API. A JSON file supplied by a pull request is never accepted as release authority.
 
+`scripts/current-release-report.sh [SOURCE_SHA] [json|markdown]` collects the same API evidence and enumerates all 14 states. It exits `1` while any proof is missing, skipped, failed, stale, mismatched, duplicated, or unexpected. A report is diagnostic only: it cannot enable the protected environment, satisfy trusted-profile provenance, create a tag, or publish an artifact.
+
 ## Build outputs
 
 The no-publish dry run builds Linux and macOS archives for AMD64 and ARM64. Each archive contains the CLI, license, notice, README, and security policy. GoReleaser produces SHA-256 checksums, and pinned Syft produces an SPDX JSON SBOM for every archive. The dry run also builds the pinned runner image locally, records its content ID, and produces a separate runner-image SBOM. It uploads temporary CI artifacts but creates no tag, release, package, container image, or Marketplace listing.

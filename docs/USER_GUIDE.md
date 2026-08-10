@@ -29,6 +29,12 @@ BehaviorLock is intended for:
 
 It is not yet intended for people who need a polished desktop application, a hosted dashboard, or a one click malware verdict.
 
+## First safe journey
+
+Run `./scripts/demo-inert.sh` before using Docker capture. The demo builds the CLI, replays two hand-written offline traces, validates their retained evidence, renders the observed difference, and removes temporary files. It does not download or execute an npm package.
+
+The maintained corpus in `benchmark/manifest.json` declares the phase, citations, reconstruction status, exact expected behavior types and rule IDs, and unsupported signals for every fixture. `benchmark/REPORT.md` contains executed fixture results. Its historical section is explicitly projection only: no affected package or malicious archive was executed.
+
 ## What the report contains
 
 A report lists behavior and bounded observed-order sequences that were added or removed between two compatible profiles.
@@ -108,4 +114,6 @@ This is useful for experiments and design partnerships. It is not yet a finished
 4. Read the [threat model](THREAT_MODEL.md) before running real capture.
 5. Read [provenance and release controls](PROVENANCE_AND_RELEASES.md) before using artifacts across workflows.
 6. Read [canary, import, and sinkhole observations](CANARY_IMPORT_AND_SINKHOLE.md) before enabling either experimental mode.
-7. Use [GitHub Discussions](https://github.com/kiranmagic7/behaviorlock/discussions) for questions and design conversation.
+7. Use [operator runbooks](runbooks/README.md) for capture, evidence, failure, rollback, and cleanup procedures.
+8. Use the [incident analysis template](templates/INCIDENT_ANALYSIS.md) before coordinating or publishing a real finding.
+9. Use [GitHub Discussions](https://github.com/kiranmagic7/behaviorlock/discussions) for questions and design conversation.

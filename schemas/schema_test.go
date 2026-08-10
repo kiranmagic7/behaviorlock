@@ -2,10 +2,14 @@ package schemas
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/kiranmagic7/behaviorlock/internal/compare"
 	"github.com/kiranmagic7/behaviorlock/internal/model"
+	"github.com/kiranmagic7/behaviorlock/internal/releasegate"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -219,4 +223,54 @@ func TestHistoricalSchemasRemainAvailable(t *testing.T) {
 	compileSchema(t, "diff-v1.schema.json")
 	compileSchema(t, "profile-v2.schema.json")
 	compileSchema(t, "diff-v2.schema.json")
+}
+
+func TestOperationalSchemasAcceptMaintainedArtifacts(t *testing.T) {
+	t.Parallel()
+	for name, fixture := range map[string]string{
+		"benchmark": "../benchmark/manifest.json",
+		"usability": "../docs/templates/usability-observation.example.json",
+	} {
+		name, fixture := name, fixture
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value any
+			if err := json.Unmarshal(raw, &value); err != nil {
+				t.Fatal(err)
+			}
+			schemaName := map[string]string{
+				"benchmark": "benchmark-manifest-v1.schema.json",
+				"usability": "usability-observation-v1.schema.json",
+			}[name]
+			if err := compileSchema(t, schemaName).Validate(value); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReleaseGateReportSchemaAcceptsGeneratedReport(t *testing.T) {
+	t.Parallel()
+	completedAt := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
+	report := releasegate.Report{
+		SchemaVersion: 1, Kind: "behaviorlock.release-gate.report",
+		Repository: "kiranmagic7/behaviorlock", SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		EvidenceGenerated: completedAt, AssessedAt: completedAt, MaxAgeHours: 24,
+		GatesExpected: 14, GatesSatisfied: 14, AllGatesSatisfied: true, Issues: []string{},
+	}
+	for gate := 1; gate <= 14; gate++ {
+		id := fmt.Sprintf("gate-%02d", gate)
+		report.Gates = append(report.Gates, releasegate.GateResult{
+			ID: id, Check: id + "-proof", Description: "required proof", Satisfied: true,
+			Status: "completed", Conclusion: "success", CompletedAt: completedAt,
+			DetailsURL: "https://github.com/kiranmagic7/behaviorlock/actions/runs/123/jobs/456",
+		})
+	}
+	if err := compileSchema(t, "release-gate-report-v1.schema.json").Validate(asJSONValue(t, report)); err != nil {
+		t.Fatal(err)
+	}
 }

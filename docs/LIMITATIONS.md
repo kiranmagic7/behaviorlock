@@ -23,5 +23,9 @@ BehaviorLock observes one narrow execution path. The following limits are part o
 19. Descriptor attribution follows successful calls, descriptor duplication, close-on-exec state, process exit, and ordinary fork inheritance. It does not fully model every `CLONE_FILES`, namespace, race, or kernel-specific descriptor-sharing edge case, so attribution remains review context rather than proof of causation.
 20. Observation sequences retain first-seen normalized behavior order within a bounded process lineage. They are ordering context, not proof of causation, intent, or an attack chain.
 21. Optional MITRE ATT&CK references use the literal relationship `consistent with`. They are navigational context and never change a rule, review level, or package classification.
+22. The inert benchmark proves only that the current parser and rule engine match declared hand-written trace expectations. It does not execute the cited historical packages, reproduce their consequences, or measure a real-world detection rate.
+23. Historical coverage entries are projections from public sources. A cited package name or advisory does not establish that every affected version expressed the reconstructed behavior in this harness.
+24. Release gate reports reflect the named GitHub checks visible for one exact commit at collection time. Checked-in snapshots become stale and never authorize publication.
+25. The offline usability journey verifies comprehension and evidence mechanics without Docker. Container containment, acquisition egress, resource boundaries, and cleanup require the separate hosted Linux integration.
 
 BehaviorLock reports observations and changes. It does not report that a package is safe, clean, benign, malicious, or free of vulnerabilities.

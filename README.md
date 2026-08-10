@@ -78,6 +78,12 @@ The proxy does not make package acquisition trustworthy. Registry metadata and p
 
 Go 1.23 or newer is required.
 
+For the shortest safe product journey, run the offline demo. It replays hand-written inert traces, verifies both raw-evidence companions, renders the difference, and cleans up without downloading or executing a package:
+
+```bash
+./scripts/demo-inert.sh
+```
+
 ```bash
 go build -trimpath -o bin/behaviorlock ./cmd/behaviorlock
 
@@ -235,12 +241,18 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 14. [Limitations](docs/LIMITATIONS.md) states what BehaviorLock cannot observe or prove.
 15. [Roadmap](ROADMAP.md) contains the release gates.
 16. [Security policy](SECURITY.md) explains private vulnerability reporting.
+17. [Operator runbooks](docs/runbooks/README.md) define disposable capture, evidence, failures, verification, rollback, and cleanup.
+18. [Inert benchmark report](benchmark/REPORT.md) records exact fixture expectations and separates them from projected historical coverage.
+19. [Usability evidence](docs/USABILITY_METRICS.md) defines local, non-telemetry product measures.
+20. [Incident analysis template](docs/templates/INCIDENT_ANALYSIS.md) defines disclosure, redaction, uncertainty, and publication approval.
 
 ## Development
 
 ```bash
 make check
 make build
+make benchmark
+make usability
 ```
 
 Docker integration runs separately:
@@ -249,7 +261,9 @@ Docker integration runs separately:
 make integration
 ```
 
-The protected `ci-required` job runs race enabled tests, shell checks, schema checks, vulnerability scanning, DCO verification, and the hardened Docker integration. CodeQL and scheduled parser fuzzing run in separate workflows.
+The protected `ci-required` job runs race enabled tests, shell checks, schema checks, vulnerability scanning, DCO verification, the inert usability journey, and the hardened Docker integration. CodeQL and scheduled parser fuzzing run in separate workflows.
+
+`scripts/current-release-report.sh` queries GitHub for the exact selected commit and prints all 14 named proof states. A blocked report exits `1`. The checked-in [status snapshot](reports/RELEASE_GATE_STATUS.md) is descriptive only and cannot authorize a release or launch.
 
 ## Project status
 

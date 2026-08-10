@@ -1,5 +1,21 @@
 # Technical reference
 
+## Inert regression corpus
+
+`benchmark/manifest.json` is a strict, bounded contract for offline hand-written traces. The benchmark runner confines fixture paths to regular non-symlink files under `benchmark/corpus`, constructs external-unverified profiles in memory, recomputes diffs with the production parser and rule engine, and requires exact sets of added behavior types, rule identifiers, and highest review level. Unknown fields, path escapes, duplicate IDs, unsafe citations, expectation drift, and unsupported reconstruction states fail closed.
+
+The JSON and Markdown report are deterministic and contain no current timestamp. `scripts/check-benchmark.sh` runs the report twice, compares bytes, and checks the committed Markdown report. Observed fixture results and projected historical coverage are separate types. A projection cannot become an executed result through formatting or aggregation.
+
+## Release gate reporting
+
+`cmd/release-gate` remains the binary authorization check. `cmd/release-report` uses the same strict configuration and evidence model but enumerates all 14 gate states so operators can see every missing, skipped, failed, stale, mismatched, duplicated, or unexpected proof. It prints a report even when blocked and exits `1` unless every gate is satisfied for the exact repository and commit.
+
+`scripts/current-release-report.sh` collects check-run evidence through GitHub’s API, never accepts a pull-request-supplied proof file, and then runs the local reporter. Reports are descriptive. They cannot create a tag, publish an image, approve a Marketplace listing, or satisfy gate 14.
+
+## Usability verification
+
+`scripts/usability-check.sh` builds both user-facing binaries from a clean checkout, runs the inert demo, validates evidence, proves tamper rejection, proves byte-identical replay, checks report interpretation fields, runs the benchmark, and proves a 0-of-14 release report remains blocked. Hosted Docker integration separately proves disposable Linux capture and cleanup because offline trace replay cannot establish container containment.
+
 ## Scope
 
 BehaviorLock `0.1.0-dev` compares selected Linux system calls observed during the same bounded phase for two exact versions of one public registry package. Offline install lifecycle execution is the default. Import and sinkhole observation are explicit experiments.
@@ -245,6 +261,6 @@ The dependency lock digest records graph variation. It does not prevent it. Repe
 
 ## Development verification
 
-`make check` runs formatting, `go vet`, race enabled tests, shell syntax, ShellCheck, Actionlint, and JSON checks.
+`make check` runs formatting, `go vet`, race enabled tests, shell syntax, ShellCheck, Actionlint, JSON checks, and deterministic inert benchmark verification. `make usability` runs the build, replay, evidence-tamper, report-interpretation, fail-closed release-report, and temporary-file cleanup journey.
 
-Hosted workflows add vulnerability scanning, CodeQL, scheduled fuzzing, DCO enforcement, and hardened Docker integration. The integration includes an inert adversarial fixture and a simulated tracer diagnostic that must fail closed.
+Hosted workflows add vulnerability scanning, CodeQL, scheduled fuzzing, DCO enforcement, the clean-checkout usability journey, and hardened Docker integration. The integration includes inert adversarial, resource, network, sinkhole, and tracer-failure fixtures. The Docker job is the disposable Linux capture usability proof; the offline usability job does not substitute for it.

@@ -20,6 +20,8 @@ The schema v3 phase, canary, sequence, import, and inert-sinkhole work was imple
 
 The split-privilege dependency-review workflows were implemented after this reviewed base. Local tests reject adversarial manifest sources, workflow permission drift, unpinned actions, artifact identity mismatch, evidence tampering, unexpected files, and unsafe Markdown. The privileged `workflow_run` path exists only on the default branch, so feature-branch checks cannot establish its hosted execution proof. This work does not inherit the audit decision and is not release authority.
 
+The inert benchmark, release-status reporter, operator runbooks, incident template, demo, and usability journey were implemented after this reviewed base. Local tests use only hand-written traces and distinguish executed fixture expectations from projection-only historical mapping. The current protected-main status snapshot reports 0 of 14 named gates satisfied. These additions improve auditability and operation; they do not inherit the audit decision, close a release gate, or authorize launch.
+
 ## Method
 
 The review combined:

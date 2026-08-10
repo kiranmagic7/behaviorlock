@@ -41,7 +41,8 @@ jobs:
       - name: Validate workflows and JSON contracts
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          jq empty config/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json testdata/sinkhole-fixture/seed/*.json testdata/sinkhole-fixture/seed/node_modules/behaviorlock-sinkhole-fixture/*.json
+          jq empty benchmark/*.json config/*.json docs/templates/*.json schemas/*.json testdata/npm-fixture/seed/*.json testdata/npm-fixture/seed/node_modules/behaviorlock-fixture/*.json testdata/resource-fixture/seed/*.json testdata/resource-fixture/seed/node_modules/behaviorlock-resource-fixture/*.json testdata/sinkhole-fixture/seed/*.json testdata/sinkhole-fixture/seed/node_modules/behaviorlock-sinkhole-fixture/*.json
+          go run ./cmd/doc-check --root .
 
   test:
     name: Test (${{ matrix.os }})
@@ -136,6 +137,23 @@ jobs:
       - name: Exercise trusted adversarial fixture
         run: ./scripts/integration-runner.sh
 
+  usability:
+    name: Inert usability journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out clean source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.23.x
+          cache: false
+      - name: Run build, replay, evidence, report, and cleanup journey
+        run: ./scripts/usability-check.sh
+
   ci-required:
     name: ci-required
     if: always()
@@ -145,6 +163,7 @@ jobs:
       - vulnerability-scan
       - dco
       - runner-integration
+      - usability
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -155,3 +174,4 @@ jobs:
           test "${{ needs.vulnerability-scan.result }}" = "success"
           test "${{ needs.dco.result }}" = "success"
           test "${{ needs.runner-integration.result }}" = "success"
+          test "${{ needs.usability.result }}" = "success"

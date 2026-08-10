@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "local-example-001",
+  "sourceSha": "0000000000000000000000000000000000000000",
+  "platform": "linux-amd64-disposable-vm",
+  "setupSuccess": true,
+  "captureStatus": "not-run-in-example",
+  "evidenceVerification": "matched",
+  "deterministicReplay": "matched",
+  "reportComprehension": {
+    "phaseIdentified": true,
+    "addedObservationsIdentified": true,
+    "reviewLevelIdentified": true,
+    "limitationsIdentified": true,
+    "understoodNoPackageVerdict": true
+  },
+  "falsePositiveReports": 0,
+  "cleanupStatus": "complete",
+  "notes": "Inert offline demo only; no package capture was performed."
+}

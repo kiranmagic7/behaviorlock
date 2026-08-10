@@ -56,6 +56,12 @@ The report summary is:
 
 The CLI threshold controls only its exit code. It does not rewrite the report or issue a package verdict.
 
+## Verification and usability
+
+The inert benchmark is a fifth, non-capture boundary. A strict manifest points only to regular files under `benchmark/corpus`, replays hand-written traces through the production parser and comparison engine, and checks exact behavior and rule expectations. Executed fixture results and citation-backed historical projections are different report fields so presentation cannot turn a projection into a measured detection.
+
+Release status reporting reads the same 14-gate configuration and GitHub evidence as the binary release gate. It enumerates every state but has no publication permission. Operator runbooks, the incident template, and the offline usability journey sit outside the capture trust boundary and make authorization, evidence retention, interpretation, rollback, and cleanup explicit.
+
 ## Stable extension points
 
 Contributors can add syscall parsers, normalization rules, report formats, policy rules, and package ecosystems without changing the Docker supervisor. Sandbox changes require a threat model update and maintainer security review.

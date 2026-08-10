@@ -35,6 +35,13 @@ All notable changes will be documented here. The project follows Keep a Changelo
 27. Optional no-route loopback sinkhole with fixed DNS, HTTP, and TCP responses
 28. Schema v3 contracts for phase, canary, sequence, import, sinkhole, and optional ATT&CK context metadata
 29. Split-privilege dependency-review automation with API-only head manifest extraction, independently validated data artifacts, and sanitized sticky comments
+30. Strict inert regression corpus with exact behavior and rule expectations plus projection-only historical mapping
+31. Deterministic JSON and Markdown benchmark reports with citation, phase, reconstruction, and unsupported-signal metadata
+32. Operator runbooks for capture, evidence, acquisition, tracing, resources, verification, rollback, and cleanup
+33. Coordinated incident-analysis template with authorization, disclosure, redaction, uncertainty, and publication approval gates
+34. Offline 30-second demo, reproducible terminal-recording source, and a clean-checkout usability journey
+35. Enumerated 14-gate status reporter that preserves all blocked reasons and never grants release authority
+36. Local usability observation schema for setup, capture, evidence, replay, comprehension, false-positive feedback, and cleanup
 
 ### Changed
 
