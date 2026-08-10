@@ -23,18 +23,80 @@ func TestTraceArgumentsKeepPackageSpecAfterImage(t *testing.T) {
 	if arguments[len(arguments)-1] != packageSpec || arguments[len(arguments)-2] != "trace" {
 		t.Fatalf("unexpected trailing arguments: %q", arguments[len(arguments)-3:])
 	}
-	for _, forbidden := range []string{"--privileged", "seccomp=unconfined", "--pid", "host", "/var/run/docker.sock"} {
-		if slices.Contains(arguments, forbidden) {
-			t.Fatalf("trace arguments contain forbidden value %q", forbidden)
-		}
-	}
+	assertExactOptionValues(t, arguments, "--cap-drop", []string{"ALL"})
+	assertExactOptionValues(t, arguments, "--cap-add", []string{"SETUID", "SETGID", "SYS_PTRACE"})
+	assertNoTraceEscalation(t, arguments)
 	joined := strings.Join(arguments, " ")
-	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "--cap-add SYS_PTRACE", "no-new-privileges:true", "--pids-limit 128", "/trace:rw,nosuid,nodev,noexec"} {
+	for _, required := range []string{"--network none", "--read-only", "--user 0:0", "no-new-privileges:true", "--pids-limit 128", "/trace:rw,nosuid,nodev,noexec"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("trace arguments missing %q: %s", required, joined)
 		}
 	}
 	assertProxyEnvironmentScrubbed(t, arguments)
+}
+
+func assertExactOptionValues(t *testing.T, arguments []string, option string, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(want))
+	for index, argument := range arguments {
+		switch {
+		case argument == option:
+			if index+1 >= len(arguments) {
+				t.Fatalf("trace arguments end after %s: %q", option, arguments)
+			}
+			got = append(got, arguments[index+1])
+		case strings.HasPrefix(argument, option+"="):
+			got = append(got, strings.TrimPrefix(argument, option+"="))
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s values = %q, want exact allowlist %q", option, got, want)
+	}
+}
+
+func assertNoTraceEscalation(t *testing.T, arguments []string) {
+	t.Helper()
+	namespaceOptions := map[string]bool{
+		"--cgroupns": true,
+		"--ipc":      true,
+		"--network":  true,
+		"--pid":      true,
+		"--userns":   true,
+		"--uts":      true,
+	}
+	for index, argument := range arguments {
+		lower := strings.ToLower(argument)
+		if lower == "--privileged" || strings.HasPrefix(lower, "--privileged=") {
+			t.Fatalf("trace arguments enable privileged mode: %q", arguments)
+		}
+		if lower == "-v" || lower == "--volume" || strings.HasPrefix(lower, "--volume=") || strings.Contains(lower, "docker.sock") {
+			t.Fatalf("trace arguments expose a host mount: %q", arguments)
+		}
+		if lower == "--security-opt" {
+			if index+1 >= len(arguments) {
+				t.Fatalf("trace arguments end after --security-opt: %q", arguments)
+			}
+			if strings.EqualFold(arguments[index+1], "seccomp=unconfined") {
+				t.Fatalf("trace arguments disable seccomp: %q", arguments)
+			}
+		}
+		if strings.HasPrefix(lower, "--security-opt=") && strings.TrimPrefix(lower, "--security-opt=") == "seccomp=unconfined" {
+			t.Fatalf("trace arguments disable seccomp: %q", arguments)
+		}
+		for option := range namespaceOptions {
+			if lower == option {
+				if index+1 >= len(arguments) {
+					t.Fatalf("trace arguments end after %s: %q", option, arguments)
+				}
+				if strings.EqualFold(arguments[index+1], "host") {
+					t.Fatalf("trace arguments join the host namespace with %s: %q", option, arguments)
+				}
+			}
+			if strings.HasPrefix(lower, option+"=") && strings.TrimPrefix(lower, option+"=") == "host" {
+				t.Fatalf("trace arguments join the host namespace with %s: %q", option, arguments)
+			}
+		}
+	}
 }
 
 func TestPrepareArgumentsNeverMountHostPaths(t *testing.T) {
