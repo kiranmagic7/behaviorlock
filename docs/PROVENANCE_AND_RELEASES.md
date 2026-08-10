@@ -45,6 +45,8 @@ The proof manifest is collected by the protected workflow from GitHub's API. A J
 
 ## Build outputs
 
+Security scanning, protected proof generation, trusted-profile creation, and release builds pin the exact patched Go 1.25.12 toolchain. The ordinary compatibility matrix still exercises the documented minimum line separately. A toolchain bump requires review and a fresh dry run; release jobs never float across patch versions.
+
 The no-publish dry run builds Linux and macOS archives for AMD64 and ARM64. Each archive contains the CLI, license, notice, README, and security policy. GoReleaser produces SHA-256 checksums, and pinned Syft produces an SPDX JSON SBOM for every archive. The dry run also builds the pinned runner image locally, records its content ID, and produces a separate runner-image SBOM. It uploads temporary CI artifacts but creates no tag, release, package, container image, or Marketplace listing.
 
 The authorized release workflow is manual and disabled by default. Even after it is enabled, a protected environment approval, exact confirmation phrase, unused semantic tag, and all 14 proofs are required. It builds before publishing, signs the checksum file with keyless Sigstore, creates GitHub provenance attestations, signs the runner image by registry digest, and creates a draft GitHub release. It never runs for a pull request, push, or tag event.
