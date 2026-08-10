@@ -640,8 +640,8 @@ func syscallName(line string) (string, bool) {
 
 func splitSyscallArguments(line string) []string {
 	open := strings.IndexByte(line, '(')
-	close := strings.LastIndex(line, ") = ")
-	if open < 0 || close <= open {
+	close, _, validResult := syscallResultBoundary(line)
+	if open < 0 || !validResult || close <= open {
 		return nil
 	}
 	input := line[open+1 : close]

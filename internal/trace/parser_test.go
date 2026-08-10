@@ -91,6 +91,18 @@ func TestParseObservesUDPAndListenerOperations(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsStraceAlignedResultColumns(t *testing.T) {
+	t.Parallel()
+	input := `[pid 33] 1786329664.837566 listen(19, 511)       = 0`
+	result, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Behaviors) != 1 || result.Behaviors[0].Type != "network.listen" || result.Behaviors[0].Outcome != "success" {
+		t.Fatalf("aligned strace result was not parsed: %#v", result.Behaviors)
+	}
+}
+
 func TestParseDoesNotAttributeMalformedNetworkDescriptorsToZero(t *testing.T) {
 	t.Parallel()
 	input := strings.Join([]string{

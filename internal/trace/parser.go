@@ -31,6 +31,7 @@ var (
 	ipv4Pattern     = regexp.MustCompile(`sin_addr=inet_addr\("([^"]+)"\)`)
 	ipv6Pattern     = regexp.MustCompile(`inet_pton\(AF_INET6,\s*"([^"]+)"`)
 	familyPattern   = regexp.MustCompile(`sa_family=(AF_[A-Z0-9_]+)`)
+	resultSeparator = regexp.MustCompile(`\)[ \t]+=[ \t]+`)
 )
 
 type Stats struct {
@@ -154,11 +155,20 @@ func extractQuoted(value string) []string {
 }
 
 func syscallResult(line string) string {
-	index := strings.LastIndex(line, ") = ")
-	if index < 0 {
+	_, resultStart, ok := syscallResultBoundary(line)
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(line[index+4:])
+	return strings.TrimSpace(line[resultStart:])
+}
+
+func syscallResultBoundary(line string) (int, int, bool) {
+	matches := resultSeparator.FindAllStringIndex(line, -1)
+	if len(matches) == 0 {
+		return 0, 0, false
+	}
+	match := matches[len(matches)-1]
+	return match[0], match[1], true
 }
 
 func classifyResult(value string) (string, string) {
