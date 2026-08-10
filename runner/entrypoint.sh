@@ -51,10 +51,12 @@ case "$mode" in
     case "${BEHAVIORLOCK_SINKHOLE_ENABLED:-0}" in
       0) ;;
       1)
-        printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /etc/resolv.conf || {
-          echo "sinkhole resolver configuration failed" >&2
+        expected_resolver='nameserver 127.0.0.1
+options timeout:1 attempts:1'
+        if [ "$(cat /etc/resolv.conf)" != "$expected_resolver" ]; then
+          echo "sinkhole resolver configuration was not inherited" >&2
           exit 74
-        }
+        fi
         ;;
       *) echo "invalid sinkhole selection" >&2; exit 64 ;;
     esac
@@ -169,11 +171,23 @@ case "$mode" in
       node /opt/behaviorlock/proxy.mjs
     ;;
   sinkhole)
-    if [ "$(id -u)" -ne 65532 ]; then
-      echo "sinkhole must run as uid 65532" >&2
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "sinkhole supervisor must start as uid 0" >&2
       exit 70
     fi
-    exec node /opt/behaviorlock/sinkhole.mjs
+    printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > /etc/resolv.conf || {
+      echo "sinkhole resolver configuration failed" >&2
+      exit 74
+    }
+    exec setpriv \
+      --reuid=65532 \
+      --regid=65532 \
+      --clear-groups \
+      --inh-caps=-all \
+      --ambient-caps=-all \
+      --bounding-set=-all \
+      --no-new-privs \
+      node /opt/behaviorlock/sinkhole.mjs
     ;;
   version)
     printf '{"node":"%s","npm":"%s","strace":"%s"}\n' \
