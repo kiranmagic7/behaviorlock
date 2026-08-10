@@ -98,8 +98,8 @@ case "$mode" in
       echo "proxy supervisor must start as uid 0" >&2
       exit 70
     fi
-    chown 65532:65532 /proxy
     chmod 0700 /proxy
+    chown 65532:65532 /proxy
     exec setpriv \
       --reuid=65532 \
       --regid=65532 \
