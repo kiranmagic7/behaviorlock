@@ -542,6 +542,7 @@ if docker ps -a --format '{{.Names}}' | grep -Eq '^behaviorlock-(resource|tracer
 fi
 
 for control_mode in timeout oom output signal; do
+  echo "control fixture: exercising $control_mode classification"
   control_image="behaviorlock-control-$control_mode:dev"
   docker build --pull=false \
     --build-arg "BEHAVIORLOCK_CONTROL_MODE=$control_mode" \
@@ -571,15 +572,32 @@ for control_mode in timeout oom output signal; do
     sed -n '1,120p' "$control_error" >&2
     exit 1
   fi
-  jq -e '.capture.acquisition.networkMode == "registry-proxy-unix" and (.subject.registryIntegrity | length > 0)' "$control_profile" >/dev/null
-  jq -e --arg expected_status "$expected_status" '.result.status == $expected_status' "$control_profile" >/dev/null
+  if ! jq -e '.capture.acquisition.networkMode == "registry-proxy-unix" and (.subject.registryIntegrity | length > 0)' "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture lost acquisition provenance" >&2
+    jq . "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
+  if ! jq -e --arg expected_status "$expected_status" '.result.status == $expected_status' "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture produced the wrong result status" >&2
+    jq .result "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
   case "$control_mode" in
-    timeout) jq -e '.result.timedOut == true' "$control_profile" >/dev/null ;;
-    oom) grep -q 'memory limit' "$control_profile" ;;
-    output) jq -e '.result.truncated == true' "$control_profile" >/dev/null ;;
-    signal) grep -q 'signal-style exit code 137' "$control_profile" ;;
+    timeout) control_contract='.result.timedOut == true' ;;
+    oom) control_contract='.result.message | contains("memory limit")' ;;
+    output) control_contract='.result.truncated == true' ;;
+    signal) control_contract='.result.message | contains("signal-style exit code 137")' ;;
   esac
+  if ! jq -e "$control_contract" "$control_profile" >/dev/null; then
+    echo "$control_mode controlled capture violated its result contract" >&2
+    jq .result "$control_profile" >&2 || true
+    sed -n '1,120p' "$control_error" >&2
+    exit 1
+  fi
   assert_no_capture_resources
+  echo "control fixture: $control_mode classification passed"
 done
 
 repeat_dir="$temp_dir/repeatability"
@@ -590,6 +608,7 @@ reference_profile_digest=""
 reference_behavior_digest=""
 repeat_index=1
 while [ "$repeat_index" -le 10 ]; do
+  echo "repeatability fixture: run $repeat_index of 10"
   repeat_envelope="$repeat_dir/run-$repeat_index.envelope"
   repeat_raw="$repeat_dir/run-$repeat_index.strace"
   repeat_profile="$repeat_dir/run-$repeat_index.profile.json"
