@@ -220,7 +220,6 @@ Read [the threat model](docs/THREAT_MODEL.md) and [the limitations](docs/LIMITAT
 5. [Acquisition proxy](docs/ACQUISITION_PROXY.md) defines registry egress enforcement and its residual risks.
 6. [Provenance and releases](docs/PROVENANCE_AND_RELEASES.md) defines trusted bundles, proof collection, SBOMs, signing, and disabled publication controls.
 7. [Review rules](docs/RULES.md) defines the versioned rule registry, precedence, and attribution boundaries.
-7. [Review rules](docs/RULES.md) defines stable identifiers and non-verdict interpretation.
 8. [Security audit](docs/SECURITY_AUDIT.md) records the latest review, fixes, scan evidence, and remaining risks.
 9. [Architecture](docs/ARCHITECTURE.md) describes component boundaries.
 10. [Threat model](docs/THREAT_MODEL.md) lists assets, hostile inputs, controls, and residual risk.
